@@ -1,5 +1,6 @@
-from nba_parser import PbP
+from pathlib import Path
 import pandas as pd
+from nba_parser import PbP
 import pytest
 
 
@@ -8,10 +9,11 @@ def setup():
     """
     function for test setup and teardown
     """
-    pbp_df = pd.read_csv("test/20700233.csv")
+    data_path = Path(__file__).parent / "test_data"
+    pbp_df = pd.read_csv(data_path / "20700233.csv")
     pbp_df["season"] = 2008
     pbp = PbP(pbp_df)
-    pbp_df = pd.read_csv("test/21100736.csv")
+    pbp_df = pd.read_csv(data_path / "21100736.csv")
     pbp1 = PbP(pbp_df)
     # TODO add multiple files here to make the tests more random and more
     # robust Matt Barlowe 2020-03-24
