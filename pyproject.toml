@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nba_parser"
+version = "0.3.0"
+authors = [
+  { name="Matthew Barlowe", email="matt@barloweanalytics.com" },
+]
+description = "A Python package to parse NBA play-by-play data and calculate game statistics."
+readme = "README.md"
+license = { file="LICENSE" }
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Science/Research",
+]
+keywords = ["basketball", "NBA", "sports analytics", "data"]
+dependencies = [
+    "pandas>=1.5.0",
+    "numpy>=1.21.0",
+    "scikit-learn>=1.0.0",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/mcbarlowe/nba_parser"
+"Bug Tracker" = "https://github.com/mcbarlowe/nba_parser/issues"
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "pytest-cov",
+    "black",
+]

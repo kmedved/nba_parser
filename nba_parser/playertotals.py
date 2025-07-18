@@ -11,10 +11,10 @@ class PlayerTotals:
     seperate class because they work best with larger sample sizes
     """
 
-    def __init__(self, pbg_list):
+    def __init__(self, pbg_list: list[pd.DataFrame]):
         self.pbg = pd.concat(pbg_list)
 
-    def player_advanced_stats(self):
+    def player_advanced_stats(self) -> pd.DataFrame:
 
         stats = [
             "toc",
@@ -109,7 +109,7 @@ class PlayerTotals:
         return grouped_df
 
     @staticmethod
-    def rapm_matrix_map(row_in, players):
+    def rapm_matrix_map(row_in: np.ndarray, players: list[int]) -> np.ndarray:
         p1 = row_in[0]
         p2 = row_in[1]
         p3 = row_in[2]
@@ -140,7 +140,7 @@ class PlayerTotals:
         return rowOut
 
     @staticmethod
-    def player_rapm_results(rapm_shifts):
+    def player_rapm_results(rapm_shifts: pd.DataFrame) -> pd.DataFrame:
         """
         funciton to produce RAPM coefficients for players in the
         rapm shifts passed to the function
@@ -277,13 +277,14 @@ class PlayerTotals:
 
         lambdas_rapm = [0.01, 0.025, 0.05, .075, 0.1]
         alphas = [lambda_to_alpha(l, train_x.shape[0]) for l in lambdas_rapm]
-        clf = RidgeCV(alphas=alphas, cv=5, fit_intercept=True, normalize=False)
+        clf = RidgeCV(alphas=alphas, cv=5, fit_intercept=True)
         model = clf.fit(train_x, train_y, sample_weight=possessions)
         player_arr = np.transpose(np.array(players).reshape(1, len(players)))
 
         # extract our coefficients into the offensive and defensive parts
-        coef_offensive_array = np.transpose(model.coef_[:, 0 : len(players)])
-        coef_defensive_array = np.transpose(model.coef_[:, len(players) : -1])
+        coef = np.atleast_2d(model.coef_)
+        coef_offensive_array = np.transpose(coef[:, 0 : len(players)])
+        coef_defensive_array = np.transpose(coef[:, len(players) : -1])
 
         # concatenate the offensive and defensive values with the playey ids into a mx3 matrix
         player_id_with_coef = np.concatenate(

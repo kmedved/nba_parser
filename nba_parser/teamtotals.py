@@ -11,10 +11,10 @@ class TeamTotals:
     seperate class because they work best with larger sample sizes
     """
 
-    def __init__(self, tbg_list):
+    def __init__(self, tbg_list: list[pd.DataFrame]):
         self.tbg = pd.concat(tbg_list)
 
-    def team_advanced_stats(self):
+    def team_advanced_stats(self) -> pd.DataFrame:
 
         teams_df = self.tbg.merge(self.tbg, on="game_id", suffixes=["", "_opponent"])
         teams_df = teams_df[teams_df.team_id != teams_df.team_id_opponent]
@@ -103,7 +103,7 @@ class TeamTotals:
         return team_advanced_stats
 
     @staticmethod
-    def rapm_matrix_map(row_in, teams):
+    def rapm_matrix_map(row_in: np.ndarray, teams: list[int]) -> np.ndarray:
         """
         function that rearranges the team rapm matrix to make it ready to pass
         to the Ridge Regression
@@ -120,7 +120,7 @@ class TeamTotals:
 
         return rowout
 
-    def _rapm_matrix_creation(self):
+    def _rapm_matrix_creation(self) -> tuple[np.ndarray, np.ndarray]:
         """
         function to create train_x and train_y matrices for input into a Ridge
         regression
@@ -138,7 +138,7 @@ class TeamTotals:
 
         return train_x, train_y
 
-    def team_rapm_results(self):
+    def team_rapm_results(self) -> pd.DataFrame:
         """
         function will return RAPM regression results based on the the teambygamestats()
         results passed to the TeamTotals object when instantiated
@@ -153,13 +153,14 @@ class TeamTotals:
         teams.sort()
         lambdas_rapm = [0.01, 0.05, 0.1]
         alphas = [lambda_to_alpha(l, train_x.shape[0]) for l in lambdas_rapm]
-        clf = RidgeCV(alphas=alphas, cv=5, fit_intercept=True, normalize=False)
+        clf = RidgeCV(alphas=alphas, cv=5, fit_intercept=True)
         model = clf.fit(train_x, train_y, sample_weight=possessions)
         team_arr = np.transpose(np.array(teams).reshape(1, len(teams)))
 
         # extract our coefficients into the offensive and defensive parts
-        coef_offensive_array = np.transpose(model.coef_[:, 0 : len(teams)])
-        coef_defensive_array = np.transpose(model.coef_[:, len(teams) : -1])
+        coef = np.atleast_2d(model.coef_)
+        coef_offensive_array = np.transpose(coef[:, 0 : len(teams)])
+        coef_defensive_array = np.transpose(coef[:, len(teams) : -1])
 
         # concatenate the offensive and defensive values with the playey ids into a mx3 matrix
         team_id_with_coef = np.concatenate(

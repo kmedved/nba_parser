@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 import pandas as pd
 import nba_parser as npar
 
@@ -20,7 +21,8 @@ def setup():
         "21900139.csv",
         "21900151.csv",
     ]
-    pbp_dfs = [pd.read_csv(f"test/{f}") for f in files]
+    data_path = Path(__file__).parent / "test_data"
+    pbp_dfs = [pd.read_csv(data_path / f) for f in files]
     pbp_dfs = [npar.PbP(pbp_df) for pbp_df in pbp_dfs]
     pbg_dfs = [pbp_df.playerbygamestats() for pbp_df in pbp_dfs]
     tbg_dfs = [pbp_df.teambygamestats() for pbp_df in pbp_dfs]
@@ -116,8 +118,6 @@ def test_team_rapm(setup):
     team_totals = npar.TeamTotals(tbg_list)
     team_rapm = team_totals.team_rapm_results()
 
-    print(team_rapm)
-
 
 def test_player_rapm(setup):
     """
@@ -126,7 +126,4 @@ def test_player_rapm(setup):
     _, _, pbp_list = setup
 
     rapm_possession = pd.concat([x.rapm_possessions() for x in pbp_list])
-    print(rapm_possession)
     player_rapm = npar.PlayerTotals.player_rapm_results(rapm_possession)
-
-    print(player_rapm)
