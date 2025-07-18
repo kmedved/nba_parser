@@ -20,9 +20,8 @@ class PbP:
         self.away_team_id = pbp_df["away_team_id"].unique()[0]
         self.season = pbp_df["season"].unique()[0]
 
-        # done to handle PbP classes created from imported csv files versus
-        # those that are created by nba_scraper that handles game_date as a
-        # proper datetime dtype
+        # handle PbP objects created from imported CSV files where ``game_date``
+        # may be parsed as a string instead of a proper datetime
         if self.df["game_date"].dtypes == "O":
             self.game_date = datetime.strptime(
                 pbp_df["game_date"].unique()[0], "%Y-%m-%d"
@@ -44,15 +43,12 @@ class PbP:
         is_shot = self.df.event_type_de == "shot"
         is_turnover = self.df.event_type_de == "turnover"
 
-        home_def_reb = (
-            (away_event & (self.df.is_d_rebound == 1))
-            | (
-                (self.df.event_type_de == "rebound")
-                & (self.df.is_d_rebound == 0)
-                & (self.df.is_o_rebound == 0)
-                & away_event
-                & (self.df.event_type_de.shift(1) != "free-throw")
-            )
+        home_def_reb = (away_event & (self.df.is_d_rebound == 1)) | (
+            (self.df.event_type_de == "rebound")
+            & (self.df.is_d_rebound == 0)
+            & (self.df.is_o_rebound == 0)
+            & away_event
+            & (self.df.event_type_de.shift(1) != "free-throw")
         )
         home_ft = home_event & (
             self.df.homedescription.str.contains("Free Throw 2 of 2")
@@ -64,15 +60,12 @@ class PbP:
         self.df.loc[home_def_reb, "home_possession"] = 1
         self.df.loc[home_ft, "home_possession"] = 1
 
-        away_def_reb = (
-            (home_event & (self.df.is_d_rebound == 1))
-            | (
-                (self.df.event_type_de == "rebound")
-                & (self.df.is_d_rebound == 0)
-                & (self.df.is_o_rebound == 0)
-                & home_event
-                & (self.df.event_type_de.shift(1) != "free-throw")
-            )
+        away_def_reb = (home_event & (self.df.is_d_rebound == 1)) | (
+            (self.df.event_type_de == "rebound")
+            & (self.df.is_d_rebound == 0)
+            & (self.df.is_o_rebound == 0)
+            & home_event
+            & (self.df.event_type_de.shift(1) != "free-throw")
         )
         away_ft = away_event & (
             self.df.visitordescription.str.contains("Free Throw 2 of 2")
@@ -90,10 +83,16 @@ class PbP:
         and free throws made and attempted.
         """
         self.df["fgm"] = np.where(
-            (self.df["shot_made"] == 1) & (self.df["event_type_de"] == "shot"), 1, 0
+            (self.df["shot_made"] == 1) & (self.df["event_type_de"] == "shot"),
+            1,
+            0,
         )
         self.df["fga"] = np.where(
-            self.df["event_type_de"].str.contains("shot|missed_shot", regex=True), 1, 0
+            self.df["event_type_de"].str.contains(
+                "shot|missed_shot", regex=True
+            ),
+            1,
+            0,
         )
         self.df["tpm"] = np.where(
             (self.df["shot_made"] == 1) & (self.df["is_three"] == 1), 1, 0
@@ -110,9 +109,9 @@ class PbP:
         )
 
         player_points_df = (
-            self.df.groupby(["player1_id", "game_date", "game_id", "player1_team_id"])[
-                ["fgm", "fga", "tpm", "tpa", "ftm", "fta", "points_made"]
-            ]
+            self.df.groupby(
+                ["player1_id", "game_date", "game_id", "player1_team_id"]
+            )[["fgm", "fga", "tpm", "tpa", "ftm", "fta", "points_made"]]
             .sum()
             .reset_index()
         )
@@ -139,9 +138,9 @@ class PbP:
         ]
 
         assists = (
-            assists.groupby(["player2_id", "game_id", "game_date", "player2_team_id"])[
-                ["eventnum"]
-            ]
+            assists.groupby(
+                ["player2_id", "game_id", "game_date", "player2_team_id"]
+            )[["eventnum"]]
             .count()
             .reset_index()
         )
@@ -186,9 +185,9 @@ class PbP:
         function to calculate player's turnover totals
         """
         turnovers = (
-            self.df.groupby(["player1_id", "game_id", "game_date", "player1_team_id"])[
-                ["is_turnover"]
-            ]
+            self.df.groupby(
+                ["player1_id", "game_id", "game_date", "player1_team_id"]
+            )[["is_turnover"]]
             .sum()
             .reset_index()
         )
@@ -218,9 +217,9 @@ class PbP:
             )
         ]
         fouls = (
-            fouls.groupby(["player1_id", "game_id", "game_date", "player1_team_id"])[
-                "eventnum"
-            ]
+            fouls.groupby(
+                ["player1_id", "game_id", "game_date", "player1_team_id"]
+            )["eventnum"]
             .count()
             .reset_index()
         )
@@ -241,9 +240,9 @@ class PbP:
         function to calculate player's steal totals
         """
         steals = (
-            self.df.groupby(["player2_id", "game_id", "game_date", "player2_team_id"])[
-                ["is_steal"]
-            ]
+            self.df.groupby(
+                ["player2_id", "game_id", "game_date", "player2_team_id"]
+            )[["is_steal"]]
             .sum()
             .reset_index()
         )
@@ -266,9 +265,9 @@ class PbP:
         """
         blocks = self.df[self.df["event_type_de"] != "jump-ball"]
         blocks = (
-            blocks.groupby(["player3_id", "game_id", "game_date", "player3_team_id"])[
-                ["is_block"]
-            ]
+            blocks.groupby(
+                ["player3_id", "game_id", "game_date", "player3_team_id"]
+            )[["is_block"]]
             .sum()
             .reset_index()
         )
@@ -312,27 +311,55 @@ class PbP:
         away_cols = [f"away_player_{i}_id" for i in range(1, 6)]
 
         home_long = no_ft_df.melt(
-            id_vars=["home_plus", "home_minus", "game_id", "game_date", "home_team_id"],
+            id_vars=[
+                "home_plus",
+                "home_minus",
+                "game_id",
+                "game_date",
+                "home_team_id",
+            ],
             value_vars=home_cols,
             value_name="player_id",
         )
         home_plus_minus = (
-            home_long.groupby(["player_id", "game_id", "game_date", "home_team_id"])[["home_plus", "home_minus"]]
+            home_long.groupby(
+                ["player_id", "game_id", "game_date", "home_team_id"]
+            )[["home_plus", "home_minus"]]
             .sum()
             .reset_index()
-            .rename(columns={"home_team_id": "team_id", "home_plus": "plus", "home_minus": "minus"})
+            .rename(
+                columns={
+                    "home_team_id": "team_id",
+                    "home_plus": "plus",
+                    "home_minus": "minus",
+                }
+            )
         )
 
         away_long = no_ft_df.melt(
-            id_vars=["away_plus", "away_minus", "game_id", "game_date", "away_team_id"],
+            id_vars=[
+                "away_plus",
+                "away_minus",
+                "game_id",
+                "game_date",
+                "away_team_id",
+            ],
             value_vars=away_cols,
             value_name="player_id",
         )
         away_plus_minus = (
-            away_long.groupby(["player_id", "game_id", "game_date", "away_team_id"])[["away_plus", "away_minus"]]
+            away_long.groupby(
+                ["player_id", "game_id", "game_date", "away_team_id"]
+            )[["away_plus", "away_minus"]]
             .sum()
             .reset_index()
-            .rename(columns={"away_team_id": "team_id", "away_plus": "plus", "away_minus": "minus"})
+            .rename(
+                columns={
+                    "away_team_id": "team_id",
+                    "away_plus": "plus",
+                    "away_minus": "minus",
+                }
+            )
         )
 
         plus_minus = pd.concat([home_plus_minus, away_plus_minus])
@@ -372,12 +399,14 @@ class PbP:
             ]
         ]
 
-        ft_df = ft_df.merge(foul_df, on=["period", "seconds_elapsed", "pctimestring"])
+        ft_df = ft_df.merge(
+            foul_df, on=["period", "seconds_elapsed", "pctimestring"]
+        )
 
         home_player_1 = (
-            ft_df.groupby(["home_player_1_id", "game_id", "game_date", "home_team_id"])[
-                ["home_plus", "home_minus"]
-            ]
+            ft_df.groupby(
+                ["home_player_1_id", "game_id", "game_date", "home_team_id"]
+            )[["home_plus", "home_minus"]]
             .sum()
             .reset_index()
         )
@@ -393,9 +422,9 @@ class PbP:
         )
 
         home_player_2 = (
-            ft_df.groupby(["home_player_2_id", "game_id", "game_date", "home_team_id"])[
-                ["home_plus", "home_minus"]
-            ]
+            ft_df.groupby(
+                ["home_player_2_id", "game_id", "game_date", "home_team_id"]
+            )[["home_plus", "home_minus"]]
             .sum()
             .reset_index()
         )
@@ -410,9 +439,9 @@ class PbP:
             inplace=True,
         )
         home_player_3 = (
-            ft_df.groupby(["home_player_3_id", "game_id", "game_date", "home_team_id"])[
-                ["home_plus", "home_minus"]
-            ]
+            ft_df.groupby(
+                ["home_player_3_id", "game_id", "game_date", "home_team_id"]
+            )[["home_plus", "home_minus"]]
             .sum()
             .reset_index()
         )
@@ -426,9 +455,9 @@ class PbP:
             inplace=True,
         )
         home_player_4 = (
-            ft_df.groupby(["home_player_4_id", "game_id", "game_date", "home_team_id"])[
-                ["home_plus", "home_minus"]
-            ]
+            ft_df.groupby(
+                ["home_player_4_id", "game_id", "game_date", "home_team_id"]
+            )[["home_plus", "home_minus"]]
             .sum()
             .reset_index()
         )
@@ -442,9 +471,9 @@ class PbP:
             inplace=True,
         )
         home_player_5 = (
-            ft_df.groupby(["home_player_5_id", "game_id", "game_date", "home_team_id"])[
-                ["home_plus", "home_minus"]
-            ]
+            ft_df.groupby(
+                ["home_player_5_id", "game_id", "game_date", "home_team_id"]
+            )[["home_plus", "home_minus"]]
             .sum()
             .reset_index()
         )
@@ -459,9 +488,9 @@ class PbP:
         )
 
         away_player_1 = (
-            ft_df.groupby(["away_player_1_id", "game_id", "game_date", "away_team_id"])[
-                ["away_plus", "away_minus"]
-            ]
+            ft_df.groupby(
+                ["away_player_1_id", "game_id", "game_date", "away_team_id"]
+            )[["away_plus", "away_minus"]]
             .sum()
             .reset_index()
         )
@@ -475,9 +504,9 @@ class PbP:
             inplace=True,
         )
         away_player_2 = (
-            ft_df.groupby(["away_player_2_id", "game_id", "game_date", "away_team_id"])[
-                ["away_plus", "away_minus"]
-            ]
+            ft_df.groupby(
+                ["away_player_2_id", "game_id", "game_date", "away_team_id"]
+            )[["away_plus", "away_minus"]]
             .sum()
             .reset_index()
         )
@@ -491,9 +520,9 @@ class PbP:
             inplace=True,
         )
         away_player_3 = (
-            ft_df.groupby(["away_player_3_id", "game_id", "game_date", "away_team_id"])[
-                ["away_plus", "away_minus"]
-            ]
+            ft_df.groupby(
+                ["away_player_3_id", "game_id", "game_date", "away_team_id"]
+            )[["away_plus", "away_minus"]]
             .sum()
             .reset_index()
         )
@@ -507,38 +536,96 @@ class PbP:
             inplace=True,
         )
         away_player_4 = ft_df.melt(
-            id_vars=["away_plus", "away_minus", "game_id", "game_date", "away_team_id"],
+            id_vars=[
+                "away_plus",
+                "away_minus",
+                "game_id",
+                "game_date",
+                "away_team_id",
+            ],
             value_vars=["away_player_4_id"],
             value_name="player_id",
-        )[["player_id", "away_plus", "away_minus", "game_id", "game_date", "away_team_id"]]
+        )[
+            [
+                "player_id",
+                "away_plus",
+                "away_minus",
+                "game_id",
+                "game_date",
+                "away_team_id",
+            ]
+        ]
         away_player_5 = ft_df.melt(
-            id_vars=["away_plus", "away_minus", "game_id", "game_date", "away_team_id"],
+            id_vars=[
+                "away_plus",
+                "away_minus",
+                "game_id",
+                "game_date",
+                "away_team_id",
+            ],
             value_vars=["away_player_5_id"],
             value_name="player_id",
-        )[["player_id", "away_plus", "away_minus", "game_id", "game_date", "away_team_id"]]
+        )[
+            [
+                "player_id",
+                "away_plus",
+                "away_minus",
+                "game_id",
+                "game_date",
+                "away_team_id",
+            ]
+        ]
 
         home_long = ft_df.melt(
-            id_vars=["home_plus", "home_minus", "game_id", "game_date", "home_team_id"],
+            id_vars=[
+                "home_plus",
+                "home_minus",
+                "game_id",
+                "game_date",
+                "home_team_id",
+            ],
             value_vars=home_cols,
             value_name="player_id",
         )
         home_plus_minus_ft = (
-            home_long.groupby(["player_id", "game_id", "game_date", "home_team_id"])[["home_plus", "home_minus"]]
+            home_long.groupby(
+                ["player_id", "game_id", "game_date", "home_team_id"]
+            )[["home_plus", "home_minus"]]
             .sum()
             .reset_index()
-            .rename(columns={"home_team_id": "team_id", "home_plus": "plus", "home_minus": "minus"})
+            .rename(
+                columns={
+                    "home_team_id": "team_id",
+                    "home_plus": "plus",
+                    "home_minus": "minus",
+                }
+            )
         )
 
         away_long = ft_df.melt(
-            id_vars=["away_plus", "away_minus", "game_id", "game_date", "away_team_id"],
+            id_vars=[
+                "away_plus",
+                "away_minus",
+                "game_id",
+                "game_date",
+                "away_team_id",
+            ],
             value_vars=away_cols,
             value_name="player_id",
         )
         away_plus_minus_ft = (
-            away_long.groupby(["player_id", "game_id", "game_date", "away_team_id"])[["away_plus", "away_minus"]]
+            away_long.groupby(
+                ["player_id", "game_id", "game_date", "away_team_id"]
+            )[["away_plus", "away_minus"]]
             .sum()
             .reset_index()
-            .rename(columns={"away_team_id": "team_id", "away_plus": "plus", "away_minus": "minus"})
+            .rename(
+                columns={
+                    "away_team_id": "team_id",
+                    "away_plus": "plus",
+                    "away_minus": "minus",
+                }
+            )
         )
 
         ft_plus_minus = pd.concat([home_plus_minus_ft, away_plus_minus_ft])
@@ -546,9 +633,9 @@ class PbP:
         # combining free-throw and non free-throw plus minus dataframes into one
         total_plus_minus = pd.concat([ft_plus_minus, plus_minus])
         total_plus_minus = (
-            total_plus_minus.groupby(["player_id", "game_id", "game_date", "team_id"])[
-                ["plus", "minus"]
-            ]
+            total_plus_minus.groupby(
+                ["player_id", "game_id", "game_date", "team_id"]
+            )[["plus", "minus"]]
             .sum()
             .reset_index()
         )
@@ -568,32 +655,56 @@ class PbP:
         away_cols = [f"away_player_{i}_id" for i in range(1, 6)]
 
         home_players_toc = (
-            self.df[home_cols + ["event_length", "game_id", "game_date", "home_team_id"]]
+            self.df[
+                home_cols
+                + ["event_length", "game_id", "game_date", "home_team_id"]
+            ]
             .melt(
-                id_vars=["event_length", "game_id", "game_date", "home_team_id"],
+                id_vars=[
+                    "event_length",
+                    "game_id",
+                    "game_date",
+                    "home_team_id",
+                ],
                 value_name="player_id",
             )
-            .groupby(["player_id", "home_team_id", "game_id", "game_date"])["event_length"]
+            .groupby(["player_id", "home_team_id", "game_id", "game_date"])[
+                "event_length"
+            ]
             .sum()
             .reset_index()
             .rename(columns={"home_team_id": "team_id", "event_length": "toc"})
         )
 
-        home_players_toc["toc_string"] = pd.to_datetime(home_players_toc["toc"], unit="s").dt.strftime("%M:%S")
+        home_players_toc["toc_string"] = pd.to_datetime(
+            home_players_toc["toc"], unit="s"
+        ).dt.strftime("%M:%S")
 
         away_players_toc = (
-            self.df[away_cols + ["event_length", "game_id", "game_date", "away_team_id"]]
+            self.df[
+                away_cols
+                + ["event_length", "game_id", "game_date", "away_team_id"]
+            ]
             .melt(
-                id_vars=["event_length", "game_id", "game_date", "away_team_id"],
+                id_vars=[
+                    "event_length",
+                    "game_id",
+                    "game_date",
+                    "away_team_id",
+                ],
                 value_name="player_id",
             )
-            .groupby(["player_id", "away_team_id", "game_id", "game_date"])["event_length"]
+            .groupby(["player_id", "away_team_id", "game_id", "game_date"])[
+                "event_length"
+            ]
             .sum()
             .reset_index()
             .rename(columns={"away_team_id": "team_id", "event_length": "toc"})
         )
 
-        away_players_toc["toc_string"] = pd.to_datetime(away_players_toc["toc"], unit="s").dt.strftime("%M:%S")
+        away_players_toc["toc_string"] = pd.to_datetime(
+            away_players_toc["toc"], unit="s"
+        ).dt.strftime("%M:%S")
 
         total_toc = pd.concat([home_players_toc, away_players_toc])
 
@@ -605,7 +716,11 @@ class PbP:
         """
         home_names = [f"home_player_{i}" for i in range(1, 6)]
         home_ids = [f"home_player_{i}_id" for i in range(1, 6)]
-        home_df = self.df[home_names + home_ids + ["home_possession", "game_id", "home_team_id"]]
+        home_df = self.df[
+            home_names
+            + home_ids
+            + ["home_possession", "game_id", "home_team_id"]
+        ]
         home_long_names = home_df.melt(
             id_vars=["home_possession", "game_id", "home_team_id"],
             value_vars=home_names,
@@ -618,16 +733,27 @@ class PbP:
         )
         home_long_names["player_id"] = home_long_ids["player_id"]
         home_possession_df = (
-            home_long_names.groupby(["player_id", "player_name", "game_id", "home_team_id"])["home_possession"]
+            home_long_names.groupby(
+                ["player_id", "player_name", "game_id", "home_team_id"]
+            )["home_possession"]
             .sum()
             .reset_index()
             .sort_values("home_possession")
-            .rename(columns={"home_team_id": "team_id", "home_possession": "possessions"})
+            .rename(
+                columns={
+                    "home_team_id": "team_id",
+                    "home_possession": "possessions",
+                }
+            )
         )
 
         away_names = [f"away_player_{i}" for i in range(1, 6)]
         away_ids = [f"away_player_{i}_id" for i in range(1, 6)]
-        away_df = self.df[away_names + away_ids + ["away_possession", "game_id", "away_team_id"]]
+        away_df = self.df[
+            away_names
+            + away_ids
+            + ["away_possession", "game_id", "away_team_id"]
+        ]
         away_long_names = away_df.melt(
             id_vars=["away_possession", "game_id", "away_team_id"],
             value_vars=away_names,
@@ -640,11 +766,18 @@ class PbP:
         )
         away_long_names["player_id"] = away_long_ids["player_id"]
         away_possession_df = (
-            away_long_names.groupby(["player_id", "player_name", "game_id", "away_team_id"])["away_possession"]
+            away_long_names.groupby(
+                ["player_id", "player_name", "game_id", "away_team_id"]
+            )["away_possession"]
             .sum()
             .reset_index()
             .sort_values("away_possession")
-            .rename(columns={"away_team_id": "team_id", "away_possession": "possessions"})
+            .rename(
+                columns={
+                    "away_team_id": "team_id",
+                    "away_possession": "possessions",
+                }
+            )
         )
 
         possession_df = pd.concat([home_possession_df, away_possession_df])
@@ -669,7 +802,8 @@ class PbP:
             self.df["away_possession"].sum(),
         ]
         team_possession_df = pd.DataFrame(
-            [row1, row2], columns=["team_id", "game_id", "team_abbrev", "possessions"]
+            [row1, row2],
+            columns=["team_id", "game_id", "team_abbrev", "possessions"],
         )
 
         return team_possession_df
@@ -686,13 +820,15 @@ class PbP:
             self.df["event_type_de"] == "free-throw", True, False
         )
         self.df["fg_made"] = np.where(
-            (self.df["event_type_de"].isin(["shot"])) & (self.df["points_made"] > 0),
+            (self.df["event_type_de"].isin(["shot"]))
+            & (self.df["points_made"] > 0),
             True,
             False,
         )
         self.df["tp_made"] = np.where(self.df["points_made"] == 3, True, False)
         self.df["ft_made"] = np.where(
-            (self.df["event_type_de"] == "free-throw") & (self.df["points_made"] == 1),
+            (self.df["event_type_de"] == "free-throw")
+            & (self.df["points_made"] == 1),
             True,
             False,
         )
@@ -733,7 +869,8 @@ class PbP:
         method to sum assists made for each team
         """
         self.df["is_assist"] = np.where(
-            (self.df["event_type_de"] == "shot") & (self.df["player2_id"] != 0),
+            (self.df["event_type_de"] == "shot")
+            & (self.df["player2_id"] != 0),
             True,
             False,
         )
@@ -743,7 +880,11 @@ class PbP:
             .reset_index()
         )
         assists_df.rename(
-            columns={"is_assist": "ast", "player1_team_id": "team_id",}, inplace=True,
+            columns={
+                "is_assist": "ast",
+                "player1_team_id": "team_id",
+            },
+            inplace=True,
         )
 
         return assists_df
@@ -754,12 +895,17 @@ class PbP:
         """
         rebounds_df = (
             self.df.groupby(["player1_team_id", "game_id"])[
-                ["is_d_rebound", "is_o_rebound",]
+                [
+                    "is_d_rebound",
+                    "is_o_rebound",
+                ]
             ]
             .sum()
             .reset_index()
         )
-        rebounds_df["player1_team_id"] = rebounds_df["player1_team_id"].astype(int)
+        rebounds_df["player1_team_id"] = rebounds_df["player1_team_id"].astype(
+            int
+        )
         rebounds_df.rename(
             columns={
                 "player1_team_id": "team_id",
@@ -777,9 +923,15 @@ class PbP:
             .sum()
             .reset_index()
         )
-        turnovers_df["player1_team_id"] = turnovers_df["player1_team_id"].astype(int)
+        turnovers_df["player1_team_id"] = turnovers_df[
+            "player1_team_id"
+        ].astype(int)
         turnovers_df.rename(
-            columns={"player1_team_id": "team_id", "is_turnover": "tov",}, inplace=True,
+            columns={
+                "player1_team_id": "team_id",
+                "is_turnover": "tov",
+            },
+            inplace=True,
         )
 
         return turnovers_df
@@ -804,14 +956,21 @@ class PbP:
         )
         fouls["player1_team_id"] = fouls["player1_team_id"].astype(int)
         fouls.rename(
-            columns={"player1_team_id": "team_id", "eventnum": "pf",}, inplace=True,
+            columns={
+                "player1_team_id": "team_id",
+                "eventnum": "pf",
+            },
+            inplace=True,
         )
 
         fouls = fouls.merge(fouls, on="game_id", suffixes=["", "_opponent"])
 
         fouls = fouls[fouls["team_id"] != fouls["team_id_opponent"]]
         fouls.rename(
-            columns={"pf_opponent": "fouls_drawn",}, inplace=True,
+            columns={
+                "pf_opponent": "fouls_drawn",
+            },
+            inplace=True,
         )
 
         return fouls[["team_id", "game_id", "pf", "fouls_drawn"]]
@@ -828,7 +987,11 @@ class PbP:
         )
         steals_df["player2_team_id"] = steals_df["player2_team_id"].astype(int)
         steals_df.rename(
-            columns={"player2_team_id": "team_id", "is_steal": "stl",}, inplace=True,
+            columns={
+                "player2_team_id": "team_id",
+                "is_steal": "stl",
+            },
+            inplace=True,
         )
 
         return steals_df
@@ -844,14 +1007,25 @@ class PbP:
         )
         blocks_df["player3_team_id"] = blocks_df["player3_team_id"].astype(int)
         blocks_df.rename(
-            columns={"player3_team_id": "team_id", "is_block": "blk",}, inplace=True,
+            columns={
+                "player3_team_id": "team_id",
+                "is_block": "blk",
+            },
+            inplace=True,
         )
 
-        blocks_df = blocks_df.merge(blocks_df, on="game_id", suffixes=["", "_opponent"])
+        blocks_df = blocks_df.merge(
+            blocks_df, on="game_id", suffixes=["", "_opponent"]
+        )
 
-        blocks_df = blocks_df[blocks_df["team_id"] != blocks_df["team_id_opponent"]]
+        blocks_df = blocks_df[
+            blocks_df["team_id"] != blocks_df["team_id_opponent"]
+        ]
         blocks_df.rename(
-            columns={"blk_opponent": "shots_blocked",}, inplace=True,
+            columns={
+                "blk_opponent": "shots_blocked",
+            },
+            inplace=True,
         )
 
         return blocks_df[["team_id", "game_id", "blk", "shots_blocked"]]
@@ -861,13 +1035,22 @@ class PbP:
         method to calculate team score differential
         """
         plus_minus_df = (
-            self.df.groupby(["player1_team_id", "game_id"])[["points_made",]]
+            self.df.groupby(["player1_team_id", "game_id"])[
+                [
+                    "points_made",
+                ]
+            ]
             .sum()
             .reset_index()
         )
-        plus_minus_df["player1_team_id"] = plus_minus_df["player1_team_id"].astype(int)
+        plus_minus_df["player1_team_id"] = plus_minus_df[
+            "player1_team_id"
+        ].astype(int)
         plus_minus_df.rename(
-            columns={"player1_team_id": "team_id", "points_made": "points_for",},
+            columns={
+                "player1_team_id": "team_id",
+                "points_made": "points_for",
+            },
             inplace=True,
         )
         plus_minus_df = plus_minus_df.merge(
@@ -882,10 +1065,15 @@ class PbP:
             plus_minus_df["points_for"] - plus_minus_df["points_for_opponent"]
         )
         plus_minus_df.rename(
-            columns={"points_for_opponent": "points_against",}, inplace=True,
+            columns={
+                "points_for_opponent": "points_against",
+            },
+            inplace=True,
         )
 
-        return plus_minus_df[["team_id", "game_id", "points_against", "plus_minus"]]
+        return plus_minus_df[
+            ["team_id", "game_id", "points_against", "plus_minus"]
+        ]
 
     @staticmethod
     def parse_possessions(poss_list: list[pd.DataFrame]) -> list[pd.DataFrame]:
@@ -903,7 +1091,10 @@ class PbP:
         parsed_list = []
 
         for df in poss_list:
-            if df.loc[df.index[-1], "event_type_de"] in ["rebound", "turnover"]:
+            if df.loc[df.index[-1], "event_type_de"] in [
+                "rebound",
+                "turnover",
+            ]:
                 if df.loc[df.index[-1], "event_type_de"] == "turnover":
                     if (
                         df.loc[df.index[-1], "event_team"]
@@ -912,7 +1103,8 @@ class PbP:
                         row_df = pd.concat(
                             [
                                 df.loc[
-                                    df.index[-1], "home_player_1":"away_player_5_id"
+                                    df.index[-1],
+                                    "home_player_1":"away_player_5_id",
                                 ],
                                 df.loc[
                                     df.index[-1],
@@ -976,7 +1168,8 @@ class PbP:
                         row_df = pd.concat(
                             [
                                 df.loc[
-                                    df.index[-1], "home_player_1":"away_player_5_id"
+                                    df.index[-1],
+                                    "home_player_1":"away_player_5_id",
                                 ],
                                 df.loc[
                                     df.index[-1],
@@ -1041,7 +1234,8 @@ class PbP:
                         row_df = pd.concat(
                             [
                                 df.loc[
-                                    df.index[-1], "home_player_1":"away_player_5_id"
+                                    df.index[-1],
+                                    "home_player_1":"away_player_5_id",
                                 ],
                                 df.loc[
                                     df.index[-1],
@@ -1106,7 +1300,8 @@ class PbP:
                         row_df = pd.concat(
                             [
                                 df.loc[
-                                    df.index[-1], "home_player_1":"away_player_5_id"
+                                    df.index[-1],
+                                    "home_player_1":"away_player_5_id",
                                 ],
                                 df.loc[
                                     df.index[-1],
@@ -1164,14 +1359,20 @@ class PbP:
                             ]
                         )
 
-            elif df.loc[df.index[-1], "event_type_de"] in ["shot", "free-throw"]:
+            elif df.loc[df.index[-1], "event_type_de"] in [
+                "shot",
+                "free-throw",
+            ]:
                 if (
                     df.loc[df.index[-1], "event_team"]
                     == df.loc[df.index[-1], "home_team_abbrev"]
                 ):
                     row_df = pd.concat(
                         [
-                            df.loc[df.index[-1], "home_player_1":"away_player_5_id"],
+                            df.loc[
+                                df.index[-1],
+                                "home_player_1":"away_player_5_id",
+                            ],
                             df.loc[
                                 df.index[-1],
                                 [
@@ -1233,7 +1434,10 @@ class PbP:
                 ):
                     row_df = pd.concat(
                         [
-                            df.loc[df.index[-1], "home_player_1":"away_player_5_id"],
+                            df.loc[
+                                df.index[-1],
+                                "home_player_1":"away_player_5_id",
+                            ],
                             df.loc[
                                 df.index[-1],
                                 [
@@ -1304,7 +1508,9 @@ class PbP:
             .sum()
             .reset_index()
         )
-        pbp_df = pbp_df.merge(points_by_second, on=["game_id", "seconds_elapsed"])
+        pbp_df = pbp_df.merge(
+            points_by_second, on=["game_id", "seconds_elapsed"]
+        )
 
         poss_index = pbp_df[
             (self.df.home_possession == 1) | (self.df.away_possession == 1)
@@ -1313,7 +1519,9 @@ class PbP:
         past_index = 0
 
         for i in poss_index:
-            shift_dfs.extend([pbp_df.iloc[past_index + 1 : i + 1, :].reset_index()])
+            shift_dfs.extend(
+                [pbp_df.iloc[past_index + 1 : i + 1, :].reset_index()]
+            )
             past_index = i
 
         poss_df = pd.concat(self.parse_possessions(shift_dfs))
@@ -1337,28 +1545,46 @@ class PbP:
         poss = self._poss_calc_player()
 
         pbg = toc.merge(
-            points, how="left", on=["player_id", "team_id", "game_date", "game_id"]
+            points,
+            how="left",
+            on=["player_id", "team_id", "game_date", "game_id"],
         )
         pbg = pbg.merge(
-            blocks, how="left", on=["player_id", "team_id", "game_date", "game_id"]
+            blocks,
+            how="left",
+            on=["player_id", "team_id", "game_date", "game_id"],
         )
         pbg = pbg.merge(
-            assists, how="left", on=["player_id", "team_id", "game_date", "game_id"]
-        )
-        pbg = pbg.merge(rebounds, how="left", on=["player_id", "game_date", "game_id"])
-        pbg = pbg.merge(
-            turnovers, how="left", on=["player_id", "team_id", "game_date", "game_id"]
+            assists,
+            how="left",
+            on=["player_id", "team_id", "game_date", "game_id"],
         )
         pbg = pbg.merge(
-            fouls, how="left", on=["player_id", "team_id", "game_date", "game_id"]
+            rebounds, how="left", on=["player_id", "game_date", "game_id"]
         )
         pbg = pbg.merge(
-            steals, how="left", on=["player_id", "team_id", "game_date", "game_id"]
+            turnovers,
+            how="left",
+            on=["player_id", "team_id", "game_date", "game_id"],
         )
         pbg = pbg.merge(
-            plus_minus, how="left", on=["player_id", "team_id", "game_date", "game_id"]
+            fouls,
+            how="left",
+            on=["player_id", "team_id", "game_date", "game_id"],
         )
-        pbg = pbg.merge(poss, how="left", on=["player_id", "team_id", "game_id"])
+        pbg = pbg.merge(
+            steals,
+            how="left",
+            on=["player_id", "team_id", "game_date", "game_id"],
+        )
+        pbg = pbg.merge(
+            plus_minus,
+            how="left",
+            on=["player_id", "team_id", "game_date", "game_id"],
+        )
+        pbg = pbg.merge(
+            poss, how="left", on=["player_id", "team_id", "game_id"]
+        )
 
         pbg["blk"] = pbg["blk"].fillna(0).astype(int)
         pbg["ast"] = pbg["ast"].fillna(0).astype(int)
@@ -1378,7 +1604,9 @@ class PbP:
             self.home_team_id == pbg["team_id"], self.home_team, self.away_team
         )
         pbg["opponent"] = np.where(
-            pbg["team_id"] == self.home_team_id, self.away_team_id, self.home_team_id
+            pbg["team_id"] == self.home_team_id,
+            self.away_team_id,
+            self.home_team_id,
         )
         pbg["opponent_abbrev"] = np.where(
             pbg["team_id"] == self.home_team_id, self.away_team, self.home_team
@@ -1416,13 +1644,15 @@ class PbP:
         tbg["game_date"] = self.df["game_date"].unique()[0]
         tbg["season"] = self.df["season"].unique()[0]
         tbg["toc"] = self.df["seconds_elapsed"].max()
-        tbg[
-            "toc_string"
-        ] = f"{math.floor(self.df['seconds_elapsed'].max()/60)}:{self.df['seconds_elapsed'].max()%60}0"
+        tbg["toc_string"] = (
+            f"{math.floor(self.df['seconds_elapsed'].max()/60)}:{self.df['seconds_elapsed'].max()%60}0"
+        )
         tbg["is_home"] = np.where(
             tbg["team_id"] == self.df["home_team_id"].unique()[0], 1, 0
         )
-        tbg["is_win"] = np.where(tbg["points_for"] > tbg["points_against"], 1, 0)
+        tbg["is_win"] = np.where(
+            tbg["points_for"] > tbg["points_against"], 1, 0
+        )
 
         tbg["blk"] = tbg["blk"].fillna(0).astype(int)
         tbg["ast"] = tbg["ast"].fillna(0).astype(int)
@@ -1438,7 +1668,9 @@ class PbP:
         tbg["ftm"] = tbg["ftm"].fillna(0).astype(int)
         tbg["fta"] = tbg["fta"].fillna(0).astype(int)
         tbg["opponent"] = np.where(
-            tbg["team_id"] == self.home_team_id, self.away_team_id, self.home_team_id
+            tbg["team_id"] == self.home_team_id,
+            self.away_team_id,
+            self.home_team_id,
         )
         tbg["opponent_abbrev"] = np.where(
             tbg["team_id"] == self.home_team_id, self.away_team, self.home_team

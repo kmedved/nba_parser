@@ -10,10 +10,9 @@
 This will be a repository where I store all my scripts and tests for compiling and calculating
 NBA game data from play by play dataframe objects.
 
-The main hook of the `nba_parser` will the the `PbP` class that will take a play
-by play Pandas dataframe either as the direct output from my [nba_scraper](https://github.com/mcbarlowe/nba_scraper)
-or as a Pandas dataframe created from the csv output of the `nba_scraper` saved
-to file.
+The main hook of the `nba_parser` package is the `PbP` class. A play by play
+`pandas.DataFrame` can be created using the ``load_pbp`` helper which pulls data
+from the NBA Stats API via ``nba_api`` or by loading a CSV file saved locally.
 
 # Player Stats
 
@@ -21,11 +20,10 @@ Player stats can be calculated from a play by play dataframe with just a few
 lines of code.
 
 ```python
-import nba_scraper.nba_scraper as ns
-import nba_parser as npar
+from nba_parser import load_pbp, PbP
 
-game_df = ns.scrape_game([20700233])
-pbp = npar.PbP(game_df)
+game_df = load_pbp(20700233)
+pbp = PbP(game_df)
 player_stats = pbp.playerbygamestats()
 
 #can also derive single possessions for RAPM calculations
@@ -43,11 +41,10 @@ and defensive rebounds.
 Team stats are called very similar to player stats.
 
 ```python
-import nba_scraper.nba_scraper as ns
-import nba_parser as npar
+from nba_parser import load_pbp, PbP
 
-game_df = ns.scrape_game([20700233])
-pbp = npar.PbP(game_df)
+game_df = load_pbp(20700233)
+pbp = PbP(game_df)
 team_stats = pbp.teambygamestats()
 ```
 
@@ -62,21 +59,21 @@ and defensive rebounds.
 I've grouped together other stat calculations that work better with larger sample sizes.
 This class takes a list of outputs from PbP.teambygamestats() but really it could take a
 list of dataframes that are the same structure as that method output. Here's an example
-of how it could work in conjunction with `nba_scraper`. I suggest writing the pbp returns to file and then importing them as the `nba_scraper` could time out due to the NBA api timing out from being hit too many times.
+This works well with data pulled using ``load_pbp`` but you can also load CSV
+files that you've saved locally to avoid repeated API calls.
 
 
 ```python
-import nba_scraper.nba_scraper as ns
-import nba_parser as npar
+from nba_parser import load_pbp, PbP, TeamTotals
 
 tbg_dfs = []
 for game_id in range(20700001, 20700010):
-    game_df = ns.scrape_game([game_id])
-    pbp = np.PbP(game_df)
+    game_df = load_pbp(game_id)
+    pbp = PbP(game_df)
     team_stats = pbp.teambygamestats()
     tbg_dfs.append(team_stats)
 
-team_totals = npar.TeamTotals(tbg_dfs)
+team_totals = TeamTotals(tbg_dfs)
 
 #produce a dataframe of eFG%, TS%, TOV%, OREB%, FT/FGA, Opponent eFG%,
 #Opponent TOV%, DREB%, Opponent FT/FGA, along with summing the other
@@ -101,19 +98,18 @@ best to have them precalculated before attempting a RAPM regression to reduce ti
 
 
 ```python
-import nba_scraper.nba_scraper as ns
-import nba_parser as npar
+from nba_parser import load_pbp, PbP, PlayerTotals
 
 pbg_dfs = []
 pbp_objects = []
 for game_id in range(20700001, 2070010):
-    game_df = ns.scrape_game([game_id])
-    pbp = np.PbP(game_df)
+    game_df = load_pbp(game_id)
+    pbp = PbP(game_df)
     pbp_objects.append(pbp)
     player_stats = pbp.playerbygamestats()
     pbg_dfs.append(player_stats)
 
-player_totals = npar.PlayerTotals(pbg_dfs)
+player_totals = PlayerTotals(pbg_dfs)
 
 #produce a dataframe of eFG%, TS%, TOV%, OREB%, AST%, DREB%,
 #STL%, BLK%, USG%, along with summing the other
