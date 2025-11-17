@@ -1935,24 +1935,45 @@ class PbP:
             game_meta=game_meta,
             pbg_stats=self.playerbygamestats(),
         )
+
+        # Sanity check: on-court points must match team totals.
+        self._check_on_court_points_consistency(box_df)
+
         return box_df
 
     def _check_on_court_points_consistency(self, box: pd.DataFrame, tol: float = 1e-6) -> None:
         """
-        Internal helper: verify that summed OnCourt_Team_Points per team
-        equals team points * 5 for this game.
+        Internal helper: verify that summed OnCourt_Team_Points / OnCourt_Opp_Points
+        per team match the scoreboard totals times 5 for this game.
 
-        Raises AssertionError if the invariant is violated.
+        Raises AssertionError if an invariant is violated.
         """
         team_points = self._point_calc_team()[["team_id", "points_for"]]
-        for _, row in team_points.iterrows():
-            team_id = row["team_id"]
-            expected = row["points_for"] * 5.0
-            actual = box.loc[box["team_id"] == team_id, "OnCourt_Team_Points"].sum()
-            if abs(actual - expected) > tol:
+
+        # Build a simple mapping team_id -> points_for for this game.
+        team_points_map = dict(zip(team_points["team_id"], team_points["points_for"]))
+
+        for team_id, points_for in team_points_map.items():
+            expected_for = points_for * 5.0
+            actual_for = box.loc[box["team_id"] == team_id, "OnCourt_Team_Points"].sum()
+
+            if abs(actual_for - expected_for) > tol:
                 raise AssertionError(
                     f"OnCourt_Team_Points inconsistency for team {team_id}: "
-                    f"actual={actual}, expected={expected}"
+                    f"actual={actual_for}, expected={expected_for}"
+                )
+
+            # Opponent points are the sum of all other teams' points_for.
+            opponent_points = sum(
+                p for t, p in team_points_map.items() if t != team_id
+            )
+            expected_against = opponent_points * 5.0
+            actual_against = box.loc[box["team_id"] == team_id, "OnCourt_Opp_Points"].sum()
+
+            if abs(actual_against - expected_against) > tol:
+                raise AssertionError(
+                    f"OnCourt_Opp_Points inconsistency for team {team_id}: "
+                    f"actual={actual_against}, expected={expected_against}"
                 )
 
     def playerbygamestats(self):
