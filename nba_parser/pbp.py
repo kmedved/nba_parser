@@ -1370,7 +1370,35 @@ class PbP:
         """
         parsed_list = []
 
+        # Explicit list of player columns so we do not rely on column order
+        # in the source DataFrame. This matches the expected order used when
+        # constructing off_player_* and def_player_* fields below.
+        player_cols = [
+            "home_player_1", "home_player_1_id",
+            "home_player_2", "home_player_2_id",
+            "home_player_3", "home_player_3_id",
+            "home_player_4", "home_player_4_id",
+            "home_player_5", "home_player_5_id",
+            "away_player_1", "away_player_1_id",
+            "away_player_2", "away_player_2_id",
+            "away_player_3", "away_player_3_id",
+            "away_player_4", "away_player_4_id",
+            "away_player_5", "away_player_5_id",
+        ]
+
         for df in poss_list:
+            if df.empty:
+                continue
+
+            # Fail fast with a clear error if the input doesn't have the
+            # expected player columns (e.g., incompatible nba_scraper version).
+            missing = [c for c in player_cols if c not in df.columns]
+            if missing:
+                raise KeyError(
+                    "parse_possessions expected player columns "
+                    f"{player_cols}, but these are missing: {missing}"
+                )
+
             if df.loc[df.index[-1], "event_type_de"] in ["rebound", "turnover"]:
                 if df.loc[df.index[-1], "event_type_de"] == "turnover":
                     if (
@@ -1379,9 +1407,7 @@ class PbP:
                     ):
                         row_df = pd.concat(
                             [
-                                df.loc[
-                                    df.index[-1], "home_player_1":"away_player_5_id"
-                                ],
+                                df.loc[df.index[-1], player_cols],
                                 df.loc[
                                     df.index[-1],
                                     [
@@ -1443,9 +1469,7 @@ class PbP:
                     ):
                         row_df = pd.concat(
                             [
-                                df.loc[
-                                    df.index[-1], "home_player_1":"away_player_5_id"
-                                ],
+                                df.loc[df.index[-1], player_cols],
                                 df.loc[
                                     df.index[-1],
                                     [
@@ -1508,9 +1532,7 @@ class PbP:
                     ):
                         row_df = pd.concat(
                             [
-                                df.loc[
-                                    df.index[-1], "home_player_1":"away_player_5_id"
-                                ],
+                                df.loc[df.index[-1], player_cols],
                                 df.loc[
                                     df.index[-1],
                                     [
@@ -1573,9 +1595,7 @@ class PbP:
                     ):
                         row_df = pd.concat(
                             [
-                                df.loc[
-                                    df.index[-1], "home_player_1":"away_player_5_id"
-                                ],
+                                df.loc[df.index[-1], player_cols],
                                 df.loc[
                                     df.index[-1],
                                     [
@@ -1639,7 +1659,7 @@ class PbP:
                 ):
                     row_df = pd.concat(
                         [
-                            df.loc[df.index[-1], "home_player_1":"away_player_5_id"],
+                            df.loc[df.index[-1], player_cols],
                             df.loc[
                                 df.index[-1],
                                 [
@@ -1701,7 +1721,7 @@ class PbP:
                 ):
                     row_df = pd.concat(
                         [
-                            df.loc[df.index[-1], "home_player_1":"away_player_5_id"],
+                            df.loc[df.index[-1], player_cols],
                             df.loc[
                                 df.index[-1],
                                 [
