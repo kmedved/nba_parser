@@ -1805,6 +1805,7 @@ class PbP:
                         "def_team_3PM": 0,
                         "def_team_FTA": 0,
                         "def_team_FTM": 0,
+                        "points_for_offense": 0,
                     })
                     continue
 
@@ -1820,9 +1821,21 @@ class PbP:
                     if off_abbrev == last_event.get("home_team_abbrev")
                     else last_event.get("home_team_id")
                 )
+                def_abbrev = (
+                    last_event.get("away_team_abbrev")
+                    if off_abbrev == last_event.get("home_team_abbrev")
+                    else last_event.get("home_team_abbrev")
+                )
 
                 off_mask = poss_events["team_id"] == off_team_id
                 def_mask = poss_events["team_id"] == def_team_id
+
+                points_col = "points_made_x" if "points_made_x" in poss_events.columns else "points_made"
+
+                off_points = poss_events.loc[off_mask, points_col].sum()
+                total_points = poss_events[points_col].sum()
+                if total_points > off_points:
+                    off_points = total_points
 
                 off_fga = poss_events.loc[off_mask, "is_fg_attempt"].sum()
                 off_fgm = poss_events.loc[off_mask, "is_fg_make"].sum()
@@ -1847,6 +1860,7 @@ class PbP:
                         "def_team_3PM": def_3pm.sum() if hasattr(def_3pm, "sum") else 0,
                         "def_team_FTA": poss_events.loc[def_mask, "is_ft"].sum(),
                         "def_team_FTM": poss_events.loc[def_mask, "is_ft_make"].sum(),
+                        "points_for_offense": off_points,
                     }
                 )
 
@@ -1872,9 +1886,9 @@ class PbP:
             agg_df = pd.DataFrame(event_aggs)
             for col in agg_df.columns:
                 poss_df[col] = agg_df[col].values
-
-        # In all cases, derive points_for_offense from the possession-level total
-        poss_df["points_for_offense"] = poss_df["points_made"]
+        else:
+            # Fallback when event-level aggregates are not requested
+            poss_df["points_for_offense"] = poss_df["points_made"]
 
         return poss_df
 
