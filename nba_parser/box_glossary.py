@@ -307,6 +307,10 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
     for _, poss in poss_df.iterrows():
         off_team = poss.get("off_team_id")
         def_team = poss.get("def_team_id")
+
+        # Skip malformed possessions where we can't reliably assign a team.
+        if pd.isna(off_team) or pd.isna(def_team) or off_team == 0 or def_team == 0:
+            continue
         points = poss.get("points_for_offense", 0)
         def_points = poss.get("points_for_defense", 0)
         off_players = [poss.get(f"off_player_{i}_id") for i in range(1, 6)]
@@ -372,11 +376,10 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
             on=["player_id", "team_id", "game_id"],
             how="left",
         )
-        exposure_df["Minutes"] = np.where(
-            exposure_df["Minutes"] == 0,
-            exposure_df["Minutes_calc"].fillna(0),
-            exposure_df["Minutes"],
-        )
+        minutes = exposure_df["Minutes"].astype(float)
+        minutes_calc = exposure_df["Minutes_calc"].astype(float)
+        minutes = np.where(minutes == 0.0, minutes_calc.fillna(0.0), minutes)
+        exposure_df["Minutes"] = minutes
         exposure_df.drop(columns=["Minutes_calc"], inplace=True)
     except Exception:
         pass
@@ -420,6 +423,15 @@ def build_player_box(
     #         "Found zero-minute rows with non-zero on-court points; "
     #         "this indicates an upstream bug in exposures/timing logic."
     #     )
+    if not zero_minute_with_points.empty:
+        import warnings
+
+        warnings.warn(
+            "Found zero-minute rows with non-zero on-court points; "
+            "this indicates a mismatch between timing and exposures. "
+            "Rows are kept to preserve on-court scoring invariants.",
+            RuntimeWarning,
+        )
 
     merged = merged[
         (merged.get("Minutes", 0) > 0)

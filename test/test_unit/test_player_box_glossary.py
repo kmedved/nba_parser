@@ -35,9 +35,15 @@ def test_player_box_glossary_basics():
         assert abs(minutes - game_minutes * 5) < 1.0
 
     team_points = pbp._point_calc_team()[["team_id", "points_for"]]
-    for _, row in team_points.iterrows():
-        team_total = box.loc[box["team_id"] == row["team_id"], "OnCourt_Team_Points"].sum()
-        assert abs(team_total - row["points_for"] * 5) < 1e-6
+    team_points_map = dict(zip(team_points["team_id"], team_points["points_for"]))
+
+    for team_id, pts_for in team_points_map.items():
+        team_total_for = box.loc[box["team_id"] == team_id, "OnCourt_Team_Points"].sum()
+        assert abs(team_total_for - pts_for * 5) < 1e-6
+
+        opp_points = sum(p for t, p in team_points_map.items() if t != team_id)
+        team_total_against = box.loc[box["team_id"] == team_id, "OnCourt_Opp_Points"].sum()
+        assert abs(team_total_against - opp_points * 5) < 1e-6
 
     pbg = pbp.playerbygamestats()
     merged = box.merge(
