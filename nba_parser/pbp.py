@@ -1806,6 +1806,7 @@ class PbP:
                         "def_team_FTA": 0,
                         "def_team_FTM": 0,
                         "points_for_offense": 0,
+                        "points_for_defense": 0,
                     })
                     continue
 
@@ -1821,50 +1822,17 @@ class PbP:
                     if off_abbrev == last_event.get("home_team_abbrev")
                     else last_event.get("home_team_id")
                 )
-                def_abbrev = (
-                    last_event.get("away_team_abbrev")
-                    if off_abbrev == last_event.get("home_team_abbrev")
-                    else last_event.get("home_team_abbrev")
-                )
-
                 off_mask = poss_events["team_id"] == off_team_id
                 def_mask = poss_events["team_id"] == def_team_id
-
-                # Use possession-level points after annotate_events:
-                # - annotate_events ensures a "points_made" column that reflects
-                #   the total points scored at each (game_id, seconds_elapsed).
-                # - off_mask selects rows belonging to the offensive team.
-                scoring_mask = poss_events["points_made"] > 0
+                # After annotate_events, "points_made" is event-level scoring
+                # (prefer points_made_x if present). So offensive points for the
+                # possession are just the sum of those events for the offense.
+                points_col = "points_made"
                 if "points_made_x" in poss_events.columns:
-                    scoring_mask &= poss_events["points_made_x"] > 0
-
-                def _sum_unique(mask: pd.Series) -> float:
-                    scoring_events = poss_events.loc[
-                        mask,
-                        ["game_id", "seconds_elapsed", "team_id", "points_made"],
-                    ]
-                    if scoring_events.empty:
-                        return 0.0
-                    unique_scoring = scoring_events.drop_duplicates(
-                        subset=["game_id", "seconds_elapsed", "team_id"]
-                    )
-                    return unique_scoring["points_made"].sum()
-
-                off_points = _sum_unique(off_mask & scoring_mask)
-                if off_points == 0 and "points_made_x" not in poss_events.columns:
-                    # Fallback when we lack per-event scoring metadata.
-                    off_points = _sum_unique(off_mask & (poss_events["points_made"] > 0))
-
-                # Optional sanity check: any scoring outside the offensive team
-                # indicates a bug in possession parsing or team attribution.
-                debug_total_points = _sum_unique(scoring_mask)
-                if debug_total_points != off_points:
-                    # TODO: tighten this to an assertion once all edge cases are fixed.
-                    # For now this is a debug hook; you can log or inspect these cases.
-                    # Example:
-                    # print("Possession scoring mismatch",
-                    #       poss_events[["game_id", "seconds_elapsed", "team_id", "points_made"]])
-                    pass
+                    points_col = "points_made_x"
+                scoring_by_team = poss_events.groupby("team_id")[points_col].sum()
+                off_points = scoring_by_team.get(off_team_id, 0)
+                def_points = scoring_by_team.get(def_team_id, 0)
 
                 off_fga = poss_events.loc[off_mask, "is_fg_attempt"].sum()
                 off_fgm = poss_events.loc[off_mask, "is_fg_make"].sum()
@@ -1890,6 +1858,7 @@ class PbP:
                         "def_team_FTA": poss_events.loc[def_mask, "is_ft"].sum(),
                         "def_team_FTM": poss_events.loc[def_mask, "is_ft_make"].sum(),
                         "points_for_offense": off_points,
+                        "points_for_defense": def_points,
                     }
                 )
 
@@ -1918,6 +1887,7 @@ class PbP:
         else:
             # Fallback when event-level aggregates are not requested
             poss_df["points_for_offense"] = poss_df["points_made"]
+            poss_df["points_for_defense"] = 0
 
         return poss_df
 
