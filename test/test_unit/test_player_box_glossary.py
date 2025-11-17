@@ -9,6 +9,23 @@ def test_player_box_glossary_basics():
 
     box = pbp.player_box_glossary()
 
+    required_cols = [
+        "Game_SingleGame",
+        "Team_SingleGame",
+        "NbaDotComID",
+        "PTS",
+        "Minutes",
+        "POSS",
+        "POSS_OFF",
+        "POSS_DEF",
+        "TSAttempts",
+        "TSpct",
+        "PTS_100p",
+        "Pace",
+    ]
+    for col in required_cols:
+        assert col in box.columns
+
     assert ((box["POSS_OFF"] + box["POSS_DEF"]) == box["POSS"]).all()
     assert (box["BLK"] == box["BLK_Team"] + box["BLK_Opp"]).all()
 
