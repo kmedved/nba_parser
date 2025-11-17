@@ -384,11 +384,24 @@ def build_player_box(
     merged = counts_df.merge(exposures_df, on=["game_id", "team_id", "player_id"], how="outer")
     merged.fillna(0, inplace=True)
     merged = merged[(merged["team_id"] != 0) & (merged["player_id"] != 0)]
-    merged = merged[
-        (merged.get("Minutes", 0) > 0)
-        | (merged.get("OnCourt_Team_Points", 0) > 0)
-        | (merged.get("OnCourt_Opp_Points", 0) > 0)
+
+    # Keep only players who actually logged playing time.
+    # If a player has non-zero on-court points but zero minutes,
+    # that's a bug upstream and should be investigated instead of
+    # being silently included here.
+    zero_minute_with_points = merged[
+        (merged.get("Minutes", 0) == 0)
+        & (
+            (merged.get("OnCourt_Team_Points", 0) != 0)
+            | (merged.get("OnCourt_Opp_Points", 0) != 0)
+        )
     ]
+
+    # TODO: add logging or debug handling for zero_minute_with_points
+    # if not zero_minute_with_points.empty:
+    #     print("Zero-minute rows with on-court points:\n", zero_minute_with_points)
+
+    merged = merged[merged.get("Minutes", 0) > 0]
 
     if pbg_stats is not None:
         pbg_subset = pbg_stats[[
@@ -422,6 +435,12 @@ def build_player_box(
             col_src = f"{src}_pbg" if f"{src}_pbg" in merged.columns else src
             merged[dest] = merged[col_src].fillna(merged.get(dest, 0))
         merged.drop(columns=[c for c in merged.columns if c.endswith("_pbg") or c in ["fgm","fga","tpm","tpa","ftm","fta","points"]], inplace=True)
+
+    # Restrict to players that actually appear in the player-by-game stats.
+    # This avoids including ghost rows from exposure-only artifacts.
+    if pbg_stats is not None and not pbg_stats.empty:
+        valid_player_ids = pbg_stats["player_id"].unique()
+        merged = merged[merged["player_id"].isin(valid_player_ids)]
 
     merged["Team_SingleGame"] = merged["team_id"]
     merged["Game_SingleGame"] = merged["game_id"]

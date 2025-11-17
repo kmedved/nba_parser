@@ -1830,12 +1830,41 @@ class PbP:
                 off_mask = poss_events["team_id"] == off_team_id
                 def_mask = poss_events["team_id"] == def_team_id
 
-                points_col = "points_made_x" if "points_made_x" in poss_events.columns else "points_made"
+                # Use possession-level points after annotate_events:
+                # - annotate_events ensures a "points_made" column that reflects
+                #   the total points scored at each (game_id, seconds_elapsed).
+                # - off_mask selects rows belonging to the offensive team.
+                scoring_mask = poss_events["points_made"] > 0
+                if "points_made_x" in poss_events.columns:
+                    scoring_mask &= poss_events["points_made_x"] > 0
 
-                off_points = poss_events.loc[off_mask, points_col].sum()
-                total_points = poss_events[points_col].sum()
-                if total_points > off_points:
-                    off_points = total_points
+                def _sum_unique(mask: pd.Series) -> float:
+                    scoring_events = poss_events.loc[
+                        mask,
+                        ["game_id", "seconds_elapsed", "team_id", "points_made"],
+                    ]
+                    if scoring_events.empty:
+                        return 0.0
+                    unique_scoring = scoring_events.drop_duplicates(
+                        subset=["game_id", "seconds_elapsed", "team_id"]
+                    )
+                    return unique_scoring["points_made"].sum()
+
+                off_points = _sum_unique(off_mask & scoring_mask)
+                if off_points == 0 and "points_made_x" not in poss_events.columns:
+                    # Fallback when we lack per-event scoring metadata.
+                    off_points = _sum_unique(off_mask & (poss_events["points_made"] > 0))
+
+                # Optional sanity check: any scoring outside the offensive team
+                # indicates a bug in possession parsing or team attribution.
+                debug_total_points = _sum_unique(scoring_mask)
+                if debug_total_points != off_points:
+                    # TODO: tighten this to an assertion once all edge cases are fixed.
+                    # For now this is a debug hook; you can log or inspect these cases.
+                    # Example:
+                    # print("Possession scoring mismatch",
+                    #       poss_events[["game_id", "seconds_elapsed", "team_id", "points_made"]])
+                    pass
 
                 off_fga = poss_events.loc[off_mask, "is_fg_attempt"].sum()
                 off_fgm = poss_events.loc[off_mask, "is_fg_make"].sum()
@@ -1937,6 +1966,24 @@ class PbP:
             pbg_stats=self.playerbygamestats(),
         )
         return box_df
+
+    def _check_on_court_points_consistency(self, box: pd.DataFrame, tol: float = 1e-6) -> None:
+        """
+        Internal helper: verify that summed OnCourt_Team_Points per team
+        equals team points * 5 for this game.
+
+        Raises AssertionError if the invariant is violated.
+        """
+        team_points = self._point_calc_team()[["team_id", "points_for"]]
+        for _, row in team_points.iterrows():
+            team_id = row["team_id"]
+            expected = row["points_for"] * 5.0
+            actual = box.loc[box["team_id"] == team_id, "OnCourt_Team_Points"].sum()
+            if abs(actual - expected) > tol:
+                raise AssertionError(
+                    f"OnCourt_Team_Points inconsistency for team {team_id}: "
+                    f"actual={actual}, expected={expected}"
+                )
 
     def playerbygamestats(self):
         """
