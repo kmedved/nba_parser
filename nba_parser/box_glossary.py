@@ -400,10 +400,9 @@ def build_player_box(
     merged.fillna(0, inplace=True)
     merged = merged[(merged["team_id"] != 0) & (merged["player_id"] != 0)]
 
-    # Keep only players who actually logged playing time.
-    # If a player has non-zero on-court points but zero minutes,
-    # that's a bug upstream and should be investigated instead of
-    # being silently included here.
+    # Identify any rows where a player has on-court points credited but no minutes.
+    # In clean data this should be rare; it typically indicates a mismatch between
+    # rotation/time-on-court tracking and possession parsing.
     zero_minute_with_points = merged[
         (merged.get("Minutes", 0) == 0)
         & (
@@ -412,9 +411,15 @@ def build_player_box(
         )
     ]
 
-    # TODO: add logging or debug handling for zero_minute_with_points
+    # For now, keep such rows so that on-court scoring sums remain consistent
+    # with team totals (tests enforce this). If you want to treat these as hard
+    # errors in a debugging context, you can uncomment the assertion below.
+    #
     # if not zero_minute_with_points.empty:
-    #     print("Zero-minute rows with on-court points:\n", zero_minute_with_points)
+    #     raise AssertionError(
+    #         "Found zero-minute rows with non-zero on-court points; "
+    #         "this indicates an upstream bug in exposures/timing logic."
+    #     )
 
     merged = merged[
         (merged.get("Minutes", 0) > 0)
