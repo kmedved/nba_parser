@@ -57,7 +57,8 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         df["points_made"] = df["points_made_y"]
     fam = df["family"].astype(str).str.lower().str.replace("-", "_", regex=False)
     df["family"] = fam
-    df["is_fg_attempt"] = fam.isin(["shot", "miss_shot"])
+
+    df["is_fg_attempt"] = fam.isin(["shot", "miss_shot", "missed_shot"])
     df["is_fg_make"] = (fam == "shot") & (df["points_made"] > 0)
     df["is_ft"] = fam == "free_throw"
     df["is_ft_make"] = df["is_ft"] & (df["points_made"] > 0)
@@ -92,13 +93,14 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     df["is_and_one"] = df.apply(_is_and_one_row, axis=1)
 
+    shot_mask = fam.isin(["shot", "miss_shot", "missed_shot"])
     df["shot_zone"] = np.where(
-        df["family"].isin(["shot", "miss_shot"]),
+        shot_mask,
         df.apply(lambda r: classify_shot_zone(r.get("shot_distance"), r.get("area")), axis=1),
         None,
     )
 
-    off_mask = df["family"].isin(["shot", "miss_shot", "free_throw", "turnover"])
+    off_mask = df["is_fg_attempt"] | df["is_ft"] | (df["family"] == "turnover")
     df["off_team_id"] = np.where(off_mask, df["team_id"], np.nan)
     df["def_team_id"] = np.where(
         off_mask,
@@ -197,8 +199,9 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
             if row.get("is_charge"):
                 _increment_count(counts[key], "CHRG")
             fouled = row.get("player2_id")
-            if fouled and not pd.isna(fouled):
-                foul_key = (game_id, row.get("team_id"), fouled)
+            fouled_team = row.get("player2_team_id")
+            if fouled and not pd.isna(fouled) and fouled_team and not pd.isna(fouled_team):
+                foul_key = (game_id, fouled_team, fouled)
                 _increment_count(counts[foul_key], "PF_DRAWN")
 
         if row.get("is_block") == 1:
@@ -363,35 +366,9 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         pass
 
-    try:
-        team_points_df = pbp._point_calc_team()[["team_id", "game_id", "points_for"]]
-        team_points = team_points_df.set_index(["game_id", "team_id"])["points_for"].to_dict()
-        exposure_df["Team_Points_Base"] = exposure_df.apply(
-            lambda r: team_points.get((r["game_id"], r["team_id"]), 0), axis=1
-        )
-        opponent_points = {}
-        for (game_id, team_id), pts in team_points.items():
-            for (g2, t2), opp_pts in team_points.items():
-                if g2 == game_id and t2 != team_id:
-                    opponent_points[(game_id, team_id)] = opp_pts
-        exposure_df["Opp_Points_Base"] = exposure_df.apply(
-            lambda r: opponent_points.get((r["game_id"], r["team_id"]), 0), axis=1
-        )
-        team_minutes = exposure_df.groupby(["game_id", "team_id"])["Minutes"].transform("sum")
-        team_minutes_per5 = team_minutes / 5.0
-        exposure_df["OnCourt_Team_Points"] = np.where(
-            team_minutes_per5 > 0,
-            exposure_df["Team_Points_Base"] * (exposure_df["Minutes"] / team_minutes_per5),
-            0,
-        )
-        exposure_df["OnCourt_Opp_Points"] = np.where(
-            team_minutes_per5 > 0,
-            exposure_df["Opp_Points_Base"] * (exposure_df["Minutes"] / team_minutes_per5),
-            0,
-        )
-        exposure_df.drop(columns=["Team_Points_Base", "Opp_Points_Base"], inplace=True)
-    except Exception:
-        pass
+    # Ensure MPG and MPG_R reflect the final Minutes value
+    exposure_df["MPG"] = exposure_df["Minutes"]
+    exposure_df["MPG_R"] = exposure_df["MPG"] / 5.0
 
     return exposure_df
 
@@ -466,8 +443,14 @@ def build_player_box(
     merged["Starts"] = 0
     merged["PlayoffGamesPlayed"] = 0
 
-    merged["TSPoss"] = merged["FGA"] + 0.44 * merged["FTA"]
-    merged["TS"] = np.where(merged["TSPoss"] > 0, merged["PTS"] / (2 * merged["TSPoss"]), 0)
+    merged["TSAttempts"] = merged["FGA"] + 0.44 * merged["FTA"]
+    merged["TSpct"] = np.where(
+        merged["TSAttempts"] > 0,
+        merged["PTS"] / (2.0 * merged["TSAttempts"]),
+        0.0,
+    )
+    merged["TSPoss"] = merged["TSAttempts"]
+    merged["TS"] = merged["TSpct"]
     merged["PossessionsUsed"] = merged["FGA"] + 0.44 * merged["FTA"] + merged.get("TOV", 0)
     merged["USG"] = np.where(merged["POSS_OFF"] > 0, merged["PossessionsUsed"] / merged["POSS_OFF"], 0)
 

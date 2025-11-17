@@ -1847,7 +1847,6 @@ class PbP:
                         "def_team_3PM": def_3pm.sum() if hasattr(def_3pm, "sum") else 0,
                         "def_team_FTA": poss_events.loc[def_mask, "is_ft"].sum(),
                         "def_team_FTM": poss_events.loc[def_mask, "is_ft_make"].sum(),
-                        "points_for_offense": poss_events.loc[off_mask, "points_made"].sum(),
                     }
                 )
 
@@ -1873,8 +1872,9 @@ class PbP:
             agg_df = pd.DataFrame(event_aggs)
             for col in agg_df.columns:
                 poss_df[col] = agg_df[col].values
-        else:
-            poss_df["points_for_offense"] = poss_df["points_made"]
+
+        # In all cases, derive points_for_offense from the possession-level total
+        poss_df["points_for_offense"] = poss_df["points_made"]
 
         return poss_df
 
