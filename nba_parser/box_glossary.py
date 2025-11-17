@@ -53,8 +53,14 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
                 np.nan,
             ),
         )
-    if "points_made" not in df.columns and "points_made_y" in df.columns:
-        df["points_made"] = df["points_made_y"]
+    # Prefer event-level points_made_x if present (e.g., after a merge that
+    # produced points_made_x / points_made_y). Otherwise fall back to the
+    # aggregate points_made_y, or leave any existing points_made untouched.
+    if "points_made" not in df.columns:
+        if "points_made_x" in df.columns:
+            df["points_made"] = df["points_made_x"]
+        elif "points_made_y" in df.columns:
+            df["points_made"] = df["points_made_y"]
     fam = df["family"].astype(str).str.lower().str.replace("-", "_", regex=False)
     df["family"] = fam
 
@@ -65,7 +71,11 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df["is_three"] = df.get("is_three", 0).astype(bool)
 
     is_tov_family = fam == "turnover"
-    subfam = df.get("subfamily_de", "").fillna("") if "subfamily_de" in df.columns else pd.Series([""] * len(df))
+    if "subfamily_de" in df.columns:
+        subfam = df["subfamily_de"].fillna("")
+    else:
+        # Ensure index alignment if df has a non-default index
+        subfam = pd.Series([""] * len(df), index=df.index)
     df["is_turnover_live"] = is_tov_family & subfam.str.contains("live", case=False)
     df["is_turnover_dead"] = is_tov_family & ~df["is_turnover_live"]
     df.loc[is_tov_family & ~subfam.astype(bool), "is_turnover_live"] = (
@@ -298,6 +308,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
         off_team = poss.get("off_team_id")
         def_team = poss.get("def_team_id")
         points = poss.get("points_for_offense", 0)
+        def_points = poss.get("points_for_defense", 0)
         off_players = [poss.get(f"off_player_{i}_id") for i in range(1, 6)]
         def_players = [poss.get(f"def_player_{i}_id") for i in range(1, 6)]
 
@@ -306,6 +317,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                 key = (poss.get("game_id"), off_team, pid)
                 _increment_count(exposures[key], "POSS_OFF")
                 _increment_count(exposures[key], "OnCourt_Team_Points", points)
+                _increment_count(exposures[key], "OnCourt_Opp_Points", def_points)
                 _increment_count(exposures[key], "OnCourt_Team_3p_Att", poss.get("off_team_3PA", 0))
                 _increment_count(exposures[key], "OnCourt_Team_3p_Made", poss.get("off_team_3PM", 0))
                 _increment_count(exposures[key], "OnCourt_Team_FT_Att", poss.get("off_team_FTA", 0))
@@ -317,6 +329,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                 key = (poss.get("game_id"), def_team, pid)
                 _increment_count(exposures[key], "POSS_DEF")
                 _increment_count(exposures[key], "OnCourt_Opp_Points", points)
+                _increment_count(exposures[key], "OnCourt_Team_Points", def_points)
                 _increment_count(exposures[key], "OnCourt_Opp_3p_Att", poss.get("off_team_3PA", 0))
                 _increment_count(exposures[key], "OnCourt_Opp_3p_Made", poss.get("off_team_3PM", 0))
                 _increment_count(exposures[key], "OnCourt_Opp_FT_Att", poss.get("off_team_FTA", 0))
@@ -360,7 +373,9 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
             how="left",
         )
         exposure_df["Minutes"] = np.where(
-            exposure_df["Minutes"] == 0, exposure_df["Minutes_calc"], exposure_df["Minutes"]
+            exposure_df["Minutes"] == 0,
+            exposure_df["Minutes_calc"].fillna(0),
+            exposure_df["Minutes"],
         )
         exposure_df.drop(columns=["Minutes_calc"], inplace=True)
     except Exception:
@@ -401,7 +416,13 @@ def build_player_box(
     # if not zero_minute_with_points.empty:
     #     print("Zero-minute rows with on-court points:\n", zero_minute_with_points)
 
-    merged = merged[merged.get("Minutes", 0) > 0]
+    merged = merged[
+        (merged.get("Minutes", 0) > 0)
+        | (
+            (merged.get("OnCourt_Team_Points", 0) != 0)
+            | (merged.get("OnCourt_Opp_Points", 0) != 0)
+        )
+    ]
 
     if pbg_stats is not None:
         pbg_subset = pbg_stats[[
