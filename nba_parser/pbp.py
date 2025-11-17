@@ -2,6 +2,12 @@ from datetime import datetime
 import math
 import numpy as np
 import pandas as pd
+from .box_glossary import (
+    annotate_events,
+    accumulate_player_counts,
+    compute_on_court_exposures,
+    build_player_box,
+)
 
 
 class PbP:
@@ -1754,13 +1760,16 @@ class PbP:
 
         return parsed_list
 
-    def rapm_possessions(self):
+    def _build_possessions(self, df: pd.DataFrame, include_event_agg: bool = False):
         """
-        method to extract out all the rapm possessions to be able to run a RAPM
-        regression on later
+        Internal helper used by rapm_possessions() and compute_on_court_exposures().
+
+        Returns a DataFrame with one row per possession. When include_event_agg is
+        True, possession-level shooting aggregates for the offense and defense are
+        added.
         """
 
-        pbp_df = self.df.copy()
+        pbp_df = df.copy()
         points_by_second = (
             pbp_df.groupby(["game_id", "seconds_elapsed"])["points_made"]
             .sum()
@@ -1768,9 +1777,7 @@ class PbP:
         )
         pbp_df = pbp_df.merge(points_by_second, on=["game_id", "seconds_elapsed"])
 
-        poss_index = pbp_df[
-            (self.df.home_possession == 1) | (self.df.away_possession == 1)
-        ].index
+        poss_index = pbp_df[(pbp_df.home_possession == 1) | (pbp_df.away_possession == 1)].index
         shift_dfs = []
         past_index = 0
 
@@ -1778,9 +1785,144 @@ class PbP:
             shift_dfs.extend([pbp_df.iloc[past_index + 1 : i + 1, :].reset_index()])
             past_index = i
 
-        poss_df = pd.concat(self.parse_possessions(shift_dfs), sort=True)
+        parsed_possessions = self.parse_possessions(shift_dfs)
+
+        event_aggs = []
+        if include_event_agg:
+            for poss_df in shift_dfs:
+                poss_events = annotate_events(poss_df.copy()) if not poss_df.empty else poss_df
+                if poss_events.empty:
+                    event_aggs.append({
+                        "off_team_FGA": 0,
+                        "off_team_FGM": 0,
+                        "off_team_3PA": 0,
+                        "off_team_3PM": 0,
+                        "off_team_FTA": 0,
+                        "off_team_FTM": 0,
+                        "def_team_FGA": 0,
+                        "def_team_FGM": 0,
+                        "def_team_3PA": 0,
+                        "def_team_3PM": 0,
+                        "def_team_FTA": 0,
+                        "def_team_FTM": 0,
+                    })
+                    continue
+
+                last_event = poss_events.iloc[-1]
+                off_abbrev = last_event.get("event_team")
+                off_team_id = (
+                    last_event.get("home_team_id")
+                    if off_abbrev == last_event.get("home_team_abbrev")
+                    else last_event.get("away_team_id")
+                )
+                def_team_id = (
+                    last_event.get("away_team_id")
+                    if off_abbrev == last_event.get("home_team_abbrev")
+                    else last_event.get("home_team_id")
+                )
+
+                off_mask = poss_events["team_id"] == off_team_id
+                def_mask = poss_events["team_id"] == def_team_id
+
+                off_fga = poss_events.loc[off_mask, "is_fg_attempt"].sum()
+                off_fgm = poss_events.loc[off_mask, "is_fg_make"].sum()
+                off_3pa = poss_events.loc[off_mask, "is_fg_attempt"].astype(bool) & poss_events.loc[off_mask, "is_three"].astype(bool)
+                off_3pm = poss_events.loc[off_mask, "is_fg_make"].astype(bool) & poss_events.loc[off_mask, "is_three"].astype(bool)
+                def_fga = poss_events.loc[def_mask, "is_fg_attempt"].sum()
+                def_fgm = poss_events.loc[def_mask, "is_fg_make"].sum()
+                def_3pa = poss_events.loc[def_mask, "is_fg_attempt"].astype(bool) & poss_events.loc[def_mask, "is_three"].astype(bool)
+                def_3pm = poss_events.loc[def_mask, "is_fg_make"].astype(bool) & poss_events.loc[def_mask, "is_three"].astype(bool)
+
+                event_aggs.append(
+                    {
+                        "off_team_FGA": off_fga,
+                        "off_team_FGM": off_fgm,
+                        "off_team_3PA": off_3pa.sum() if hasattr(off_3pa, "sum") else 0,
+                        "off_team_3PM": off_3pm.sum() if hasattr(off_3pm, "sum") else 0,
+                        "off_team_FTA": poss_events.loc[off_mask, "is_ft"].sum(),
+                        "off_team_FTM": poss_events.loc[off_mask, "is_ft_make"].sum(),
+                        "def_team_FGA": def_fga,
+                        "def_team_FGM": def_fgm,
+                        "def_team_3PA": def_3pa.sum() if hasattr(def_3pa, "sum") else 0,
+                        "def_team_3PM": def_3pm.sum() if hasattr(def_3pm, "sum") else 0,
+                        "def_team_FTA": poss_events.loc[def_mask, "is_ft"].sum(),
+                        "def_team_FTM": poss_events.loc[def_mask, "is_ft_make"].sum(),
+                        "points_for_offense": poss_events.loc[off_mask, "points_made"].sum(),
+                    }
+                )
+
+        poss_df = pd.concat(parsed_possessions, sort=True)
+
+        poss_df["off_team_abbrev"] = poss_df["event_team_abbrev"]
+        poss_df["off_team_id"] = np.where(
+            poss_df["event_team_abbrev"] == poss_df["home_team_abbrev"],
+            poss_df["home_team_id"],
+            poss_df["away_team_id"],
+        )
+        poss_df["def_team_abbrev"] = np.where(
+            poss_df["event_team_abbrev"] == poss_df["home_team_abbrev"],
+            poss_df["away_team_abbrev"],
+            poss_df["home_team_abbrev"],
+        )
+        poss_df["def_team_id"] = np.where(
+            poss_df["event_team_abbrev"] == poss_df["home_team_abbrev"],
+            poss_df["away_team_id"],
+            poss_df["home_team_id"],
+        )
+        if include_event_agg and event_aggs:
+            agg_df = pd.DataFrame(event_aggs)
+            for col in agg_df.columns:
+                poss_df[col] = agg_df[col].values
+        else:
+            poss_df["points_for_offense"] = poss_df["points_made"]
 
         return poss_df
+
+    def rapm_possessions(self):
+        """
+        method to extract out all the rapm possessions to be able to run a RAPM
+        regression on later
+        """
+        pbp_df = self.df.copy()
+        poss_df = self._build_possessions(pbp_df, include_event_agg=False)
+
+        return poss_df
+
+    def player_box_glossary(
+        self,
+        player_meta: pd.DataFrame | None = None,
+        game_meta: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        """
+        Build a per-player, per-game box aligned to an external glossary.
+
+        Assumes this PbP instance represents a single game.
+
+        - Inputs:
+            player_meta: optional DataFrame with identity/biographical fields
+                keyed by NBA.com personId (player_id / NbaDotComID).
+            game_meta: optional DataFrame with game-level fields keyed by game_id.
+
+        - Output:
+            DataFrame with one row per (game_id, team_id, player_id),
+            including raw counts and derived rates (TS, USG, ORB%, DRB%, AST%, BLK%, etc.)
+            plus on/off stats.
+        """
+        df = self.df.copy()
+
+        df = annotate_events(df)
+        counts_df = accumulate_player_counts(df)
+        exposures_df = compute_on_court_exposures(self, df)
+
+        box_df = build_player_box(
+            df=df,
+            counts_df=counts_df,
+            exposures_df=exposures_df,
+            player_meta=player_meta,
+            game_meta=game_meta,
+            pbg_stats=self.playerbygamestats(),
+        )
+        return box_df
 
     def playerbygamestats(self):
         """
@@ -1835,6 +1977,7 @@ class PbP:
         pbg["tpa"] = pbg["tpa"].fillna(0).astype(int)
         pbg["ftm"] = pbg["ftm"].fillna(0).astype(int)
         pbg["fta"] = pbg["fta"].fillna(0).astype(int)
+        pbg["points"] = pbg["points"].fillna(0).astype(int)
         pbg["is_home"] = np.where(pbg["team_id"] == self.home_team_id, 1, 0)
         pbg["team_abbrev"] = np.where(
             self.home_team_id == pbg["team_id"], self.home_team, self.away_team
