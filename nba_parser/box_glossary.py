@@ -384,7 +384,11 @@ def build_player_box(
     merged = counts_df.merge(exposures_df, on=["game_id", "team_id", "player_id"], how="outer")
     merged.fillna(0, inplace=True)
     merged = merged[(merged["team_id"] != 0) & (merged["player_id"] != 0)]
-    merged = merged[merged.get("Minutes", 0) > 0]
+    merged = merged[
+        (merged.get("Minutes", 0) > 0)
+        | (merged.get("OnCourt_Team_Points", 0) > 0)
+        | (merged.get("OnCourt_Opp_Points", 0) > 0)
+    ]
 
     if pbg_stats is not None:
         pbg_subset = pbg_stats[[
@@ -400,8 +404,12 @@ def build_player_box(
             "points",
         ]].copy()
         pbg_subset.fillna(0, inplace=True)
-        merged = merged.merge(pbg_subset, on=["game_id", "team_id", "player_id"], how="left", suffixes=("", "_pbg"))
-        merged = merged[merged["player_id"].isin(pbg_stats["player_id"].unique())]
+        merged = merged.merge(
+            pbg_subset,
+            on=["game_id", "team_id", "player_id"],
+            how="left",
+            suffixes=("", "_pbg"),
+        )
         for src, dest in [
             ("fgm", "FGM"),
             ("fga", "FGA"),
