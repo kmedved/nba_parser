@@ -886,3 +886,98 @@ def build_player_box(
     merged["AST_3P"] = merged.get("AST_3P", 0)
 
     return merged
+
+
+def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Given a player-level box (the output of build_player_box / player_box_glossary),
+    append one 'TOTAL' row per (game_id, team_id) that aggregates team stats.
+
+    NOTE: This is a simple aggregator:
+      - Sums counting stats and minutes across players.
+      - Sums POSS_OFF / POSS_DEF and recomputes key rate stats from those sums.
+      - Sets identifier fields (NbaDotComID, PlayerID, etc.) to 0 and labels
+        Team/FullName/Player_Team as 'TOTAL'.
+
+    You may want to tweak which columns are summed vs averaged depending on your
+    use case.
+    """
+    if box_df.empty:
+        return box_df
+
+    id_cols = ["game_id", "team_id"]
+    numeric_cols = box_df.select_dtypes(include=[np.number]).columns.tolist()
+
+    # We do NOT want to sum identifiers or flags that are per-row, not additive.
+    do_not_sum = {
+        "NbaDotComID",
+        "PlayerID",
+        "PlayerSeasonID",
+        "Game_SingleGame",
+        "Team_SingleGame",
+        "home_fl",
+        "h_tm_id",
+        "v_tm_id",
+    }
+    sum_cols = [c for c in numeric_cols if c not in do_not_sum]
+
+    team_totals = (
+        box_df.groupby(id_cols, as_index=False)[sum_cols]
+        .sum()
+    )
+
+    # Reattach simple identifiers from the first player row per team/game.
+    first_meta = (
+        box_df.groupby(id_cols, as_index=False)
+        .agg(
+            {
+                "Game_SingleGame": "first",
+                "Team_SingleGame": "first",
+                "season": "first",
+                "Year": "first",
+                "h_tm_id": "first",
+                "v_tm_id": "first",
+                "home_fl": "first",
+                "Team": "first",
+            }
+        )
+    )
+
+    team_totals = team_totals.merge(first_meta, on=id_cols, how="left")
+
+    team_totals["NbaDotComID"] = 0
+    team_totals["PlayerID"] = 0
+    team_totals["PlayerSeasonID"] = 0
+    team_totals["FullName"] = "TOTAL"
+    team_totals["Player_Team"] = "TOTAL"
+    team_totals["G"] = 1  # team played the game
+    team_totals["Inactive"] = 0
+    team_totals["DNP"] = 0
+    team_totals["DNP_Rest"] = 0
+    team_totals["DNP_CD"] = 0
+    team_totals["DNP_SingleGame"] = 0
+    team_totals["Starts"] = 0  # not meaningful at team level
+
+    # Recompute key rate stats for totals so they're not 5x sums.
+    team_totals["TSAttempts"] = team_totals["FGA"] + 0.44 * team_totals["FTA"]
+    team_totals["TSpct"] = np.where(
+        team_totals["TSAttempts"] > 0,
+        team_totals["PTS"] / (2.0 * team_totals["TSAttempts"]),
+        0.0,
+    )
+    team_totals["PossessionsUsed"] = (
+        team_totals["FGA"]
+        + 0.44 * team_totals["FTA"]
+        + team_totals.get("TOV", 0)
+    )
+    team_totals["USG"] = np.where(
+        team_totals["POSS_OFF"] > 0,
+        team_totals["PossessionsUsed"] / team_totals["POSS_OFF"],
+        0.0,
+    )
+
+    # Label the team row.
+    team_totals["Team"] = "TOTAL"
+
+    # Concatenate players + team totals
+    return pd.concat([box_df, team_totals], ignore_index=True)
