@@ -13,8 +13,48 @@ from nba_parser.box_glossary import (
 def pbp_v2_game_instance():
     """Provides a parsed PbP object for a V2 game."""
     pbp_df = pd.read_csv("test/20700233.csv")
+    for col in [
+        "game_id",
+        "team_id",
+        "home_team_id",
+        "away_team_id",
+        *(f"home_player_{i}_id" for i in range(1, 6)),
+        *(f"away_player_{i}_id" for i in range(1, 6)),
+    ]:
+        if col in pbp_df.columns:
+            pbp_df[col] = pd.to_numeric(pbp_df[col], errors="coerce").fillna(0).astype(int)
     pbp_df["season"] = 2008
     return PbP(pbp_df)
+
+
+def test_string_ids_are_normalized():
+    """Ensure PbP and downstream box glossary coerce string IDs to ints."""
+
+    pbp_df = pd.read_csv("test/20700233.csv")
+    id_cols = [
+        "game_id",
+        "team_id",
+        "home_team_id",
+        "away_team_id",
+        *(f"home_player_{i}_id" for i in range(1, 6)),
+        *(f"away_player_{i}_id" for i in range(1, 6)),
+        "player1_id",
+        "player2_id",
+        "player3_id",
+        "player1_team_id",
+        "player2_team_id",
+        "player3_team_id",
+    ]
+    for col in id_cols:
+        if col in pbp_df.columns:
+            pbp_df[col] = pbp_df[col].astype(str)
+    pbp_df["season"] = 2008
+
+    box = PbP(pbp_df).player_box_glossary()
+
+    assert pd.api.types.is_integer_dtype(box["game_id"])
+    assert pd.api.types.is_integer_dtype(box["team_id"])
+    assert pd.api.types.is_integer_dtype(box["player_id"])
 
 
 def test_decoupling_from_pbg_stats(pbp_v2_game_instance):
