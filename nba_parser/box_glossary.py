@@ -649,10 +649,11 @@ def build_player_box(
     merged["fta"] = merged.get("FTA", 0)
     merged["points"] = merged.get("PTS", 0)
 
-    team_minutes = merged.groupby(["game_id", "team_id"])["Minutes"].transform("sum")
-    team_minutes_per_5 = team_minutes / 5.0
-    team_poss = merged.groupby(["game_id", "team_id"])["POSS_OFF"].transform("max")
-    merged["Pace"] = np.where(team_minutes_per_5 > 0, team_poss * 48.0 / team_minutes_per_5, 0)
+    merged["Pace"] = np.where(
+        merged["Minutes"] > 0,
+        (merged["POSS_OFF"] + merged["POSS_DEF"]) / merged["Minutes"] * 48.0,
+        0.0,
+    )
 
     merged["BLK_Opp_100p"] = np.where(merged["POSS_DEF"] > 0, merged.get("BLK_Opp", 0) / merged["POSS_DEF"] * 100.0, 0)
     merged["BLK_Team_100p"] = np.where(merged["POSS_DEF"] > 0, merged.get("BLK_Team", 0) / merged["POSS_DEF"] * 100.0, 0)
