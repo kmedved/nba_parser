@@ -1058,25 +1058,28 @@ class PbP:
                         df.loc[df.index[-1], "event_team"]
                         == df.loc[df.index[-1], "home_team_abbrev"]
                     ):
-                        row_df = pd.concat(
+                        tail = df.loc[
+                            df.index[-1],
                             [
-                                df.loc[df.index[-1], player_cols],
-                                df.loc[
-                                    df.index[-1],
-                                    [
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                ],
-                            ]
-                        )
+                                "points_made",
+                                "home_team_abbrev",
+                                "event_team",
+                                "away_team_abbrev",
+                                "home_team_id",
+                                "away_team_id",
+                                "game_id",
+                                "game_date",
+                                "season",
+                            ],
+                        ].copy()
+                        # Defensive rebounds end the possession; the offensive
+                        # team is the opponent of the rebounder.
+                        tail["event_team"] = tail["home_team_abbrev"]
+
+                        row_df = pd.concat([
+                            df.loc[df.index[-1], player_cols],
+                            tail,
+                        ])
 
                         parsed_list.extend(
                             [
@@ -1120,25 +1123,26 @@ class PbP:
                         df.loc[df.index[-1], "event_team"]
                         == df.loc[df.index[-1], "away_team_abbrev"]
                     ):
-                        row_df = pd.concat(
+                        tail = df.loc[
+                            df.index[-1],
                             [
-                                df.loc[df.index[-1], player_cols],
-                                df.loc[
-                                    df.index[-1],
-                                    [
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                ],
-                            ]
-                        )
+                                "points_made",
+                                "home_team_abbrev",
+                                "event_team",
+                                "away_team_abbrev",
+                                "home_team_id",
+                                "away_team_id",
+                                "game_id",
+                                "game_date",
+                                "season",
+                            ],
+                        ].copy()
+                        tail["event_team"] = tail["away_team_abbrev"]
+
+                        row_df = pd.concat([
+                            df.loc[df.index[-1], player_cols],
+                            tail,
+                        ])
 
                         parsed_list.extend(
                             [
@@ -1486,15 +1490,26 @@ class PbP:
                 continue
 
             last_event = poss_events.iloc[-1]
-            off_abbrev = last_event.get("event_team")
+            last_team = last_event.get("event_team")
+            home_abbrev = last_event.get("home_team_abbrev")
+            away_abbrev = last_event.get("away_team_abbrev")
+
+            # Possessions end with a turnover or a defensive rebound. In the
+            # rebound case the offensive team is the opponent of the rebounding
+            # team, not the rebounder itself.
+            if last_event.get("event_type_de") == "rebound":
+                off_abbrev = away_abbrev if last_team == home_abbrev else home_abbrev
+            else:
+                off_abbrev = last_team
+
             off_team_id = (
                 last_event.get("home_team_id")
-                if off_abbrev == last_event.get("home_team_abbrev")
+                if off_abbrev == home_abbrev
                 else last_event.get("away_team_id")
             )
             def_team_id = (
                 last_event.get("away_team_id")
-                if off_abbrev == last_event.get("home_team_abbrev")
+                if off_abbrev == home_abbrev
                 else last_event.get("home_team_id")
             )
 
