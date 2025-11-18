@@ -1815,6 +1815,10 @@ class PbP:
 
         parsed_possessions = self.parse_possessions(shift_dfs)
 
+        if not parsed_possessions:
+            # No possessions detected; return an empty DataFrame so callers can handle gracefully.
+            return pd.DataFrame()
+
         event_aggs = []
         for poss_df in shift_dfs:
             poss_events = annotate_events(poss_df.copy()) if not poss_df.empty else poss_df
