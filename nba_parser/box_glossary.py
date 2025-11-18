@@ -268,6 +268,7 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                 _increment_count(counts[key], "TOV_Dead")
 
         if row.get("family") == "foul" and not pd.isna(player_id):
+            # Player 1 commits the foul
             _increment_count(counts[key], "PF")
             if row.get("is_loose_ball_foul"):
                 _increment_count(counts[key], "PF_Loose")
@@ -275,13 +276,17 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                 _increment_count(counts[key], "FLAGRANT")
             if row.get("is_technical"):
                 _increment_count(counts[key], "TECH")
-            if row.get("is_charge"):
-                _increment_count(counts[key], "CHRG")
+
             fouled = row.get("player2_id")
             fouled_team = row.get("player2_team_id")
             if fouled and not pd.isna(fouled) and fouled_team and not pd.isna(fouled_team):
                 foul_key = (game_id, fouled_team, fouled)
+                # Generic foul drawn
                 _increment_count(counts[foul_key], "PF_DRAWN")
+
+                # Charges drawn: subset of PF_DRAWN where the foul is a charge
+                if row.get("is_charge"):
+                    _increment_count(counts[foul_key], "CHRG")
 
         if row.get("is_block") == 1:
             blocker = row.get("player3_id")
