@@ -1467,6 +1467,10 @@ class PbP:
             if poss_events.empty:
                 event_aggs.append(
                     {
+                        "off_team_id": np.nan,
+                        "off_team_abbrev": "",
+                        "def_team_id": np.nan,
+                        "def_team_abbrev": "",
                         "off_team_FGA": 0,
                         "off_team_FGM": 0,
                         "off_team_3PA": 0,
@@ -1486,15 +1490,46 @@ class PbP:
                 continue
 
             last_event = poss_events.iloc[-1]
-            off_abbrev = last_event.get("event_team")
+            
+            home_abbrev = last_event.get("home_team_abbrev")
+            away_abbrev = last_event.get("away_team_abbrev")
+            ev_team = last_event.get("event_team")
+            ev_family = last_event.get("family")
+
+            # Determine which team was on offense this possession.
+            if ev_family in ("shot", "free_throw", "turnover"):
+                # Last event belongs to the offense.
+                off_abbrev = ev_team
+            elif ev_family == "rebound":
+                # Defensive rebound ends the possession -> offense is the other team.
+                if ev_team == home_abbrev:
+                    off_abbrev = away_abbrev
+                elif ev_team == away_abbrev:
+                    off_abbrev = home_abbrev
+                else:
+                    # Fallback: unknown, just use event team.
+                    off_abbrev = ev_team
+            else:
+                # Fallback for unusual families: treat event team as offense.
+                off_abbrev = ev_team
+
+            # Determine defense as the other team.
+            if off_abbrev == home_abbrev:
+                def_abbrev = away_abbrev
+            elif off_abbrev == away_abbrev:
+                def_abbrev = home_abbrev
+            else:
+                # Fallback: if we can't match, just swap based on event team.
+                def_abbrev = away_abbrev if ev_team == home_abbrev else home_abbrev
+
             off_team_id = (
                 last_event.get("home_team_id")
-                if off_abbrev == last_event.get("home_team_abbrev")
+                if off_abbrev == home_abbrev
                 else last_event.get("away_team_id")
             )
             def_team_id = (
                 last_event.get("away_team_id")
-                if off_abbrev == last_event.get("home_team_abbrev")
+                if off_abbrev == home_abbrev
                 else last_event.get("home_team_id")
             )
 
@@ -1503,21 +1538,22 @@ class PbP:
 
             off_fga = poss_events.loc[off_mask, "is_fg_attempt"].sum()
             off_fgm = poss_events.loc[off_mask, "is_fg_make"].sum()
-            off_3pa = (
+            off_3pa_mask = (
                 poss_events.loc[off_mask, "is_fg_attempt"].astype(bool)
                 & poss_events.loc[off_mask, "is_three"].astype(bool)
             )
-            off_3pm = (
+            off_3pm_mask = (
                 poss_events.loc[off_mask, "is_fg_make"].astype(bool)
                 & poss_events.loc[off_mask, "is_three"].astype(bool)
             )
+
             def_fga = poss_events.loc[def_mask, "is_fg_attempt"].sum()
             def_fgm = poss_events.loc[def_mask, "is_fg_make"].sum()
-            def_3pa = (
+            def_3pa_mask = (
                 poss_events.loc[def_mask, "is_fg_attempt"].astype(bool)
                 & poss_events.loc[def_mask, "is_three"].astype(bool)
             )
-            def_3pm = (
+            def_3pm_mask = (
                 poss_events.loc[def_mask, "is_fg_make"].astype(bool)
                 & poss_events.loc[def_mask, "is_three"].astype(bool)
             )
@@ -1527,16 +1563,20 @@ class PbP:
 
             event_aggs.append(
                 {
+                    "off_team_id": off_team_id,
+                    "off_team_abbrev": off_abbrev,
+                    "def_team_id": def_team_id,
+                    "def_team_abbrev": def_abbrev,
                     "off_team_FGA": off_fga,
                     "off_team_FGM": off_fgm,
-                    "off_team_3PA": off_3pa.sum() if hasattr(off_3pa, "sum") else 0,
-                    "off_team_3PM": off_3pm.sum() if hasattr(off_3pm, "sum") else 0,
+                    "off_team_3PA": off_3pa_mask.sum(),
+                    "off_team_3PM": off_3pm_mask.sum(),
                     "off_team_FTA": poss_events.loc[off_mask, "is_ft"].sum(),
                     "off_team_FTM": poss_events.loc[off_mask, "is_ft_make"].sum(),
                     "def_team_FGA": def_fga,
                     "def_team_FGM": def_fgm,
-                    "def_team_3PA": def_3pa.sum() if hasattr(def_3pa, "sum") else 0,
-                    "def_team_3PM": def_3pm.sum() if hasattr(def_3pm, "sum") else 0,
+                    "def_team_3PA": def_3pa_mask.sum(),
+                    "def_team_3PM": def_3pm_mask.sum(),
                     "def_team_FTA": poss_events.loc[def_mask, "is_ft"].sum(),
                     "def_team_FTM": poss_events.loc[def_mask, "is_ft_make"].sum(),
                     "points_for_offense": off_points,
@@ -1544,26 +1584,17 @@ class PbP:
                 }
             )
 
-        poss_df = pd.concat(parsed_possessions, sort=True)
+        poss_df = pd.concat(parsed_possessions, sort=True).reset_index(drop=True)
 
-        poss_df["off_team_abbrev"] = poss_df["event_team_abbrev"]
-        poss_df["off_team_id"] = np.where(
-            poss_df["event_team_abbrev"] == poss_df["home_team_abbrev"],
-            poss_df["home_team_id"],
-            poss_df["away_team_id"],
-        )
-        poss_df["def_team_abbrev"] = np.where(
-            poss_df["event_team_abbrev"] == poss_df["home_team_abbrev"],
-            poss_df["away_team_abbrev"],
-            poss_df["home_team_abbrev"],
-        )
-        poss_df["def_team_id"] = np.where(
-            poss_df["event_team_abbrev"] == poss_df["home_team_abbrev"],
-            poss_df["away_team_id"],
-            poss_df["home_team_id"],
-        )
         if event_aggs:
             agg_df = pd.DataFrame(event_aggs)
+
+            # Attach team IDs and abbreviations inferred in the event_aggs loop
+            poss_df["off_team_id"] = agg_df["off_team_id"].values
+            poss_df["def_team_id"] = agg_df["def_team_id"].values
+            poss_df["off_team_abbrev"] = agg_df["off_team_abbrev"].values
+            poss_df["def_team_abbrev"] = agg_df["def_team_abbrev"].values
+
             poss_df["points_for_offense"] = agg_df["points_for_offense"].values
             poss_df["points_for_defense"] = agg_df["points_for_defense"].values
 
@@ -1585,6 +1616,10 @@ class PbP:
                     poss_df[col] = agg_df[col].values
         else:
             # Fallback when no events were parsed
+            poss_df["off_team_id"] = np.nan
+            poss_df["def_team_id"] = np.nan
+            poss_df["off_team_abbrev"] = ""
+            poss_df["def_team_abbrev"] = ""
             poss_df["points_for_offense"] = 0
             poss_df["points_for_defense"] = 0
 
