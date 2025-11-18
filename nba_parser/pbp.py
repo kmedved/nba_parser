@@ -370,6 +370,19 @@ class PbP:
 
         return blocks
 
+    def _melt_lineup(
+        self, df, player_cols, value_name="player_id", extra_id_vars=None
+    ):
+        if extra_id_vars is None:
+            extra_id_vars = []
+        melted = df[player_cols + extra_id_vars].melt(
+            id_vars=extra_id_vars,
+            value_vars=player_cols,
+            var_name="slot",
+            value_name=value_name,
+        )
+        return melted
+
     def _plus_minus_calc_player(self):
         """
         LEGACY: v2-based on/off plus-minus calculation.
@@ -382,6 +395,8 @@ class PbP:
 
         The implementation has been refactored to use melt-style reshaping instead
         of ten nearly-identical groupby calls.
+
+        Players with id == 0 (placeholders / bench) are ignored.
         """
 
         df = self.df.copy()
@@ -415,12 +430,10 @@ class PbP:
 
         # Home players on non-FT events
         home_cols = [f"home_player_{i}_id" for i in range(1, 6)]
-        home_pm = no_ft_df[home_cols + ["home_plus", "home_minus", "game_id", "game_date", "home_team_id"]].copy()
-        home_pm = home_pm.melt(
-            id_vars=["home_plus", "home_minus", "game_id", "game_date", "home_team_id"],
-            value_vars=home_cols,
-            var_name="slot",
-            value_name="player_id",
+        home_pm = self._melt_lineup(
+            no_ft_df,
+            home_cols,
+            extra_id_vars=["home_plus", "home_minus", "game_id", "game_date", "home_team_id"],
         )
         home_pm.rename(
             columns={
@@ -433,12 +446,10 @@ class PbP:
 
         # Away players on non-FT events
         away_cols = [f"away_player_{i}_id" for i in range(1, 6)]
-        away_pm = no_ft_df[away_cols + ["away_plus", "away_minus", "game_id", "game_date", "away_team_id"]].copy()
-        away_pm = away_pm.melt(
-            id_vars=["away_plus", "away_minus", "game_id", "game_date", "away_team_id"],
-            value_vars=away_cols,
-            var_name="slot",
-            value_name="player_id",
+        away_pm = self._melt_lineup(
+            no_ft_df,
+            away_cols,
+            extra_id_vars=["away_plus", "away_minus", "game_id", "game_date", "away_team_id"],
         )
         away_pm.rename(
             columns={
@@ -508,14 +519,10 @@ class PbP:
 
         # Home players on FT events
         home_ft_cols = [f"home_player_{i}_id" for i in range(1, 6)]
-        home_ft = ft_df[
-            home_ft_cols + ["home_plus", "home_minus", "game_id", "game_date", "home_team_id"]
-        ].copy()
-        home_ft = home_ft.melt(
-            id_vars=["home_plus", "home_minus", "game_id", "game_date", "home_team_id"],
-            value_vars=home_ft_cols,
-            var_name="slot",
-            value_name="player_id",
+        home_ft = self._melt_lineup(
+            ft_df,
+            home_ft_cols,
+            extra_id_vars=["home_plus", "home_minus", "game_id", "game_date", "home_team_id"],
         )
         home_ft.rename(
             columns={
@@ -528,14 +535,10 @@ class PbP:
 
         # Away players on FT events
         away_ft_cols = [f"away_player_{i}_id" for i in range(1, 6)]
-        away_ft = ft_df[
-            away_ft_cols + ["away_plus", "away_minus", "game_id", "game_date", "away_team_id"]
-        ].copy()
-        away_ft = away_ft.melt(
-            id_vars=["away_plus", "away_minus", "game_id", "game_date", "away_team_id"],
-            value_vars=away_ft_cols,
-            var_name="slot",
-            value_name="player_id",
+        away_ft = self._melt_lineup(
+            ft_df,
+            away_ft_cols,
+            extra_id_vars=["away_plus", "away_minus", "game_id", "game_date", "away_team_id"],
         )
         away_ft.rename(
             columns={
@@ -579,28 +582,28 @@ class PbP:
 
         The implementation here has been refactored to use melt-style reshaping
         instead of 10 nearly-identical groupby calls.
+
+        Players with id == 0 (placeholders / bench) are ignored.
         """
-        df = self.df
+        df = self.df.copy()
 
         # Home players: melt home_player_1_id..home_player_5_id with event_length
         home_cols = [f"home_player_{i}_id" for i in range(1, 6)]
-        home_toc = df[home_cols + ["event_length", "game_id", "game_date", "home_team_id"]].copy()
-        home_toc = home_toc.melt(
-            id_vars=["event_length", "game_id", "game_date", "home_team_id"],
-            value_vars=home_cols,
-            var_name="slot",
+        home_toc = self._melt_lineup(
+            df,
+            home_cols,
             value_name="player_id",
+            extra_id_vars=["event_length", "game_id", "game_date", "home_team_id"],
         )
         home_toc.rename(columns={"home_team_id": "team_id"}, inplace=True)
 
         # Away players: melt away_player_1_id..away_player_5_id with event_length
         away_cols = [f"away_player_{i}_id" for i in range(1, 6)]
-        away_toc = df[away_cols + ["event_length", "game_id", "game_date", "away_team_id"]].copy()
-        away_toc = away_toc.melt(
-            id_vars=["event_length", "game_id", "game_date", "away_team_id"],
-            value_vars=away_cols,
-            var_name="slot",
+        away_toc = self._melt_lineup(
+            df,
+            away_cols,
             value_name="player_id",
+            extra_id_vars=["event_length", "game_id", "game_date", "away_team_id"],
         )
         away_toc.rename(columns={"away_team_id": "team_id"}, inplace=True)
 
