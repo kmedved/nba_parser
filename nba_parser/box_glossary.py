@@ -159,9 +159,34 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     if "away_team_id" not in df.columns:
         df["away_team_id"] = np.nan
     if "team_id" not in df.columns:
+    # --- Event team id (robust normalization) ---
+    if "team_id" in df.columns:
+        team_id = df["team_id"].copy()
+        # Identify rows where team_id is present but invalid (NaN or 0)
+        mask_missing = team_id.isna() | (team_id == 0)
+        if mask_missing.any():
+            event_team = df.get("event_team")
+            if event_team is None:
+                event_team = df.get("team_tricode")
+            if event_team is None:
+                event_team = pd.Series([None] * len(df), index=df.index)
+
+            filled = np.where(
+                event_team == df.get("home_team_abbrev"),
+                df.get("home_team_id"),
+                np.where(
+                    event_team == df.get("away_team_abbrev"),
+                    df.get("away_team_id"),
+                    np.nan,
+                ),
+            )
+            # Apply the fix only to the invalid rows
+            team_id[mask_missing] = filled[mask_missing]
+        df["team_id"] = team_id
+    else:
+        # Fallback for when the column doesn't exist at all
         event_team = df.get("event_team")
         if event_team is None:
-            # Some feeds may expose team code as team_tricode instead.
             event_team = df.get("team_tricode")
         if event_team is None:
             event_team = pd.Series([None] * len(df), index=df.index)
@@ -169,11 +194,7 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         df["team_id"] = np.where(
             event_team == df.get("home_team_abbrev"),
             df.get("home_team_id"),
-            np.where(
-                event_team == df.get("away_team_abbrev"),
-                df.get("away_team_id"),
-                np.nan,
-            ),
+            np.where(event_team == df.get("away_team_abbrev"), df.get("away_team_id"), np.nan),
         )
 
     # --- Ensure event-level points_made exists ---
@@ -222,6 +243,10 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     if steal_col is None:
         steal_col = pd.Series([0] * len(df), index=df.index)
     is_steal_flag = steal_col.fillna(0).astype(int) == 1
+    is_steal_raw = df.get("is_steal")
+    if is_steal_raw is None:
+        is_steal_raw = pd.Series([0] * len(df), index=df.index)
+    is_steal_flag = is_steal_raw.fillna(0).astype(int) == 1
 
     sub_lower = subfam.astype(str).str.lower()
     # Some feeds may explicitly label "live-ball" in text.
