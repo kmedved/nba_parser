@@ -277,11 +277,11 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- Foul flavors ---
     is_foul_family = fam == "foul"
-    sub = subfam.str.lower()
+    sub = sub_lower
     df["is_loose_ball_foul"] = is_foul_family & sub.str.contains("loose")
     df["is_flagrant"] = is_foul_family & sub.str.contains("flagrant")
     df["is_technical"] = is_foul_family & sub.str.contains("technical")
-    charge_mask = sub.str.contains("charging") | sub.str.contains("charge")
+    charge_mask = sub.str.contains(r"\bcharging\b") | sub.str.contains(r"\bcharge\b")
     df["is_charge"] = is_foul_family & charge_mask
 
     # --- And-ones via qualifiers ---
@@ -1016,6 +1016,14 @@ def build_player_box(
     merged["AST_10_17ft"] = merged.get("AST_10_17", 0)
     merged["AST_18_23ft"] = merged.get("AST_18_23", 0)
     merged["AST_3P"] = merged.get("AST_3P", 0)
+
+    # --- Final Glossary Naming Alignment ---
+    # Alias on-court rebound opportunity counts to glossary-style names,
+    # without clobbering any existing columns if they appear upstream.
+    if "OnCourt_For_OREB_FGA" not in merged.columns:
+        merged["OnCourt_For_OREB_FGA"] = merged.get("OnCourt_For_OREB_Total", 0)
+    if "OnCourt_For_DREB_FGA" not in merged.columns:
+        merged["OnCourt_For_DREB_FGA"] = merged.get("OnCourt_For_DREB_Total", 0)
 
     return merged
 
