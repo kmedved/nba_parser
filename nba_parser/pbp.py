@@ -74,7 +74,7 @@ class PbP:
 
         # Prefer canonical possession_after when available (CDN + modern schema),
         # fall back to legacy text-based heuristics otherwise.
-        if "possession_after" in self.df.columns:
+        if "possession_after" in self.df.columns and self.df["possession_after"].notna().any():
             # Start with zeros.
             self.df["home_possession"] = 0
             self.df["away_possession"] = 0
@@ -1055,6 +1055,62 @@ class PbP:
         return plus_minus_df[["team_id", "game_id", "points_against", "plus_minus"]]
 
     @staticmethod
+    def _get_off_def_teams(last_event):
+        """
+        Determine offensive and defensive team abbreviations for a possession
+        based on the last event in that possession.
+
+        Returns (off_abbrev, def_abbrev), where each is a team abbreviation
+        (home_team_abbrev or away_team_abbrev). In ambiguous cases, falls back
+        to treating the home team as the offense.
+        """
+        home_abbrev = last_event.get("home_team_abbrev")
+        away_abbrev = last_event.get("away_team_abbrev")
+        ev_team = last_event.get("event_team")
+
+        # Prefer annotated 'family' if available, otherwise use raw event_type_de.
+        ev_type = last_event.get("family") or last_event.get("event_type_de")
+        if isinstance(ev_type, str):
+            ev_type = ev_type.replace("-", "_").lower()
+
+        # Default offense/defense mapping mirrors existing _build_possessions logic:
+        # - shot / free_throw / turnover: offense is event_team
+        # - rebound: offense is the other team
+        # - fallback: treat event_team as offense
+        if ev_type in ("shot", "miss_shot", "missed_shot", "free_throw", "turnover"):
+            off_abbrev = ev_team
+        elif ev_type == "rebound":
+            if ev_team == home_abbrev:
+                off_abbrev = away_abbrev
+            elif ev_team == away_abbrev:
+                off_abbrev = home_abbrev
+            else:
+                # If we can't match, fall back to event team
+                off_abbrev = ev_team
+        else:
+            off_abbrev = ev_team
+
+        # Derive defense as the other team, with fallbacks.
+        if off_abbrev == home_abbrev:
+            def_abbrev = away_abbrev
+        elif off_abbrev == away_abbrev:
+            def_abbrev = home_abbrev
+        else:
+            # Fallback: if off_abbrev doesn't match either home/away, try event team.
+            if ev_team == home_abbrev:
+                off_abbrev = home_abbrev
+                def_abbrev = away_abbrev
+            elif ev_team == away_abbrev:
+                off_abbrev = away_abbrev
+                def_abbrev = home_abbrev
+            else:
+                # Final fallback: default to home offense
+                off_abbrev = home_abbrev
+                def_abbrev = away_abbrev
+
+        return off_abbrev, def_abbrev
+
+    @staticmethod
     def parse_possessions(poss_list):
         """
         a function to parse each possession and create one row for offense team
@@ -1110,11 +1166,14 @@ class PbP:
                 )
 
             last_event = df.iloc[-1]
-            event_team = last_event.get("event_team")
-            home_abbrev = last_event.get("home_team_abbrev")
-            away_abbrev = last_event.get("away_team_abbrev")
+
+            # Determine offense/defense using centralized helper
+            off_abbrev, _ = PbP._get_off_def_teams(last_event)
 
             def append_possession(off_abbrev: str):
+                home_abbrev = last_event.get("home_team_abbrev")
+                away_abbrev = last_event.get("away_team_abbrev")
+
                 if off_abbrev not in (home_abbrev, away_abbrev):
                     # Fallback: assume home is on offense to preserve row count
                     off_abbrev = home_abbrev
@@ -1175,9 +1234,6 @@ class PbP:
                             ],
                         )
                     )
-
-                # Track which segment produced this possession row
-                used_indices.append(seg_idx)
                 else:
                     parsed_list.append(
                         pd.DataFrame(
@@ -1216,16 +1272,10 @@ class PbP:
                         )
                     )
 
-            # Determine offense using the same heuristics as _build_possessions.
-            ev_type = last_event.get("event_type_de")
-            off_abbrev = event_team
-            if ev_type == "rebound":
-                if event_team == home_abbrev:
-                    off_abbrev = away_abbrev
-                elif event_team == away_abbrev:
-                    off_abbrev = home_abbrev
-
             append_possession(off_abbrev)
+
+            # Track which segment produced this possession row
+            used_indices.append(seg_idx)
 
         return parsed_list, used_indices
 
@@ -1238,7 +1288,8 @@ class PbP:
         added.
         """
 
-        pbp_df = df.copy()
+        # Annotate events once for the whole game
+        pbp_df = annotate_events(df.copy())
 
         poss_index = pbp_df[(pbp_df.home_possession == 1) | (pbp_df.away_possession == 1)].index
         shift_dfs = []
@@ -1259,7 +1310,7 @@ class PbP:
 
         event_aggs = []
         for poss_df in shift_dfs:
-            poss_events = annotate_events(poss_df.copy()) if not poss_df.empty else poss_df
+            poss_events = poss_df  # already annotated via pbp_df
             if poss_events.empty:
                 event_aggs.append(
                     {
@@ -1291,34 +1342,9 @@ class PbP:
             
             home_abbrev = last_event.get("home_team_abbrev")
             away_abbrev = last_event.get("away_team_abbrev")
-            ev_team = last_event.get("event_team")
-            ev_family = last_event.get("family")
 
-            # Determine which team was on offense this possession.
-            if ev_family in ("shot", "free_throw", "turnover"):
-                # Last event belongs to the offense.
-                off_abbrev = ev_team
-            elif ev_family == "rebound":
-                # Defensive rebound ends the possession -> offense is the other team.
-                if ev_team == home_abbrev:
-                    off_abbrev = away_abbrev
-                elif ev_team == away_abbrev:
-                    off_abbrev = home_abbrev
-                else:
-                    # Fallback: unknown, just use event team.
-                    off_abbrev = ev_team
-            else:
-                # Fallback for unusual families: treat event team as offense.
-                off_abbrev = ev_team
-
-            # Determine defense as the other team.
-            if off_abbrev == home_abbrev:
-                def_abbrev = away_abbrev
-            elif off_abbrev == away_abbrev:
-                def_abbrev = home_abbrev
-            else:
-                # Fallback: if we can't match, just swap based on event team.
-                def_abbrev = away_abbrev if ev_team == home_abbrev else home_abbrev
+            # Centralized determination
+            off_abbrev, def_abbrev = self._get_off_def_teams(last_event)
 
             off_team_id = (
                 last_event.get("home_team_id")

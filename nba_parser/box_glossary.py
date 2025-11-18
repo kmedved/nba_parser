@@ -795,6 +795,10 @@ def build_player_box(
         0,
     )
 
+    # Alias rebound opportunity totals to glossary column names
+    merged["OnCourt_For_OREB_FGA"] = merged.get("OnCourt_For_OREB_Total", 0)
+    merged["OnCourt_For_DREB_FGA"] = merged.get("OnCourt_For_DREB_Total", 0)
+
     teammate_fgm = np.maximum(
         merged["OnCourt_Team_FGM"] - merged.get("FGM", 0),
         0.0,
@@ -1012,11 +1016,6 @@ def build_player_box(
     merged["AST_10_17ft"] = merged.get("AST_10_17", 0)
     merged["AST_18_23ft"] = merged.get("AST_18_23", 0)
     merged["AST_3P"] = merged.get("AST_3P", 0)
-
-    # --- Final Glossary Naming Alignment ---
-    # Alias on-court rebound opportunity counts to glossary-style names
-    merged["OnCourt_For_OREB_FGA"] = merged.get("OnCourt_For_OREB_Total", 0)
-    merged["OnCourt_For_DREB_FGA"] = merged.get("OnCourt_For_DREB_Total", 0)
 
     return merged
 
