@@ -155,24 +155,26 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     fam = fam_src.astype(str).str.lower().str.replace("-", "_", regex=False)
     df["family"] = fam
 
-    # --- Event team id (robust normalization) ---
+    # --- Event team id ---
     if "home_team_id" not in df.columns:
         df["home_team_id"] = np.nan
     if "away_team_id" not in df.columns:
         df["away_team_id"] = np.nan
 
     if "team_id" in df.columns:
+        # Repair rows where team_id is missing or 0 using event_team.
         team_id = df["team_id"].copy()
-        # Identify rows where team_id is present but invalid (NaN or 0)
-        mask_missing = team_id.isna() | (team_id == 0)
-        if mask_missing.any():
+        missing = team_id.isna() | (team_id == 0)
+
+        if missing.any():
             event_team = df.get("event_team")
             if event_team is None:
+                # Some feeds may expose team code as team_tricode instead.
                 event_team = df.get("team_tricode")
             if event_team is None:
                 event_team = pd.Series([None] * len(df), index=df.index)
 
-            filled = np.where(
+            inferred = np.where(
                 event_team == df.get("home_team_abbrev"),
                 df.get("home_team_id"),
                 np.where(
@@ -181,11 +183,10 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
                     np.nan,
                 ),
             )
-            # Apply the fix only to the invalid rows
-            team_id[mask_missing] = filled[mask_missing]
+            team_id[missing] = inferred[missing]
+
         df["team_id"] = team_id
     else:
-        # Fallback for when the column doesn't exist at all
         event_team = df.get("event_team")
         if event_team is None:
             event_team = df.get("team_tricode")
@@ -195,7 +196,11 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         df["team_id"] = np.where(
             event_team == df.get("home_team_abbrev"),
             df.get("home_team_id"),
-            np.where(event_team == df.get("away_team_abbrev"), df.get("away_team_id"), np.nan),
+            np.where(
+                event_team == df.get("away_team_abbrev"),
+                df.get("away_team_id"),
+                np.nan,
+            ),
         )
 
     # --- Ensure event-level points_made exists ---
@@ -685,10 +690,9 @@ def build_player_box(
     if game_meta is not None and not game_meta.empty:
         merged = merged.merge(game_meta, on="game_id", how="left")
 
-    # Set metadata defaults only if they don't already exist from a merge
-    if "G" not in merged.columns:
-        merged["G"] = np.where(merged["Minutes"] > 0, 1, 0)
-    
+    # Games played is always computed from Minutes, not taken from metadata.
+    merged["G"] = np.where(merged["Minutes"] > 0, 1, 0)
+
     meta_defaults = {
         "Inactive": 0, "DNP": 0, "DNP_Rest": 0, "DNP_CD": 0,
         "DNP_SingleGame": 0, "Starts": 0, "PlayoffGamesPlayed": 0,
