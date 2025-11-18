@@ -57,8 +57,11 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     # --- Canonical family based on event_type_de, not API family ---
     if "event_type_de" in df.columns:
         fam_src = df["event_type_de"]
+    elif "family" in df.columns:
+        fam_src = df["family"]
     else:
-        raise KeyError("annotate_events expects an 'event_type_de' column")
+        # If we truly have no event type info, fall back to an empty string series
+        fam_src = pd.Series([""] * len(df), index=df.index)
 
     fam = fam_src.astype(str).str.lower().str.replace("-", "_", regex=False)
     df["family"] = fam
@@ -362,7 +365,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                     key = (row.get("game_id"), block_team, pid)
                     _increment_count(exposures[key], "TM_BLK_OnCourt")
 
-        # Treat any missed FG attempt as an OREB/DREB opportunity.
+        # Treat any missed FG attempt as an OREB/DREB opportunity, using the normalized flag.
         if row.get("is_fg_attempt") and not bool(row.get("is_fg_make")):
             shoot_team = row.get("team_id")
             home_on = home_ids
