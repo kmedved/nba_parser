@@ -1089,6 +1089,15 @@ class PbP:
             if df.empty:
                 continue
 
+            last_type = df.loc[df.index[-1], "event_type_de"]
+            valid_end_types = ["rebound", "turnover", "shot", "free-throw"]
+
+            if last_type not in valid_end_types:
+                idx = df[df["event_type_de"].isin(valid_end_types)].index
+                if len(idx) == 0:
+                    continue
+                df = df.loc[: idx[-1]].copy()
+
             # Fail fast with a clear error if the input doesn't have the
             # expected player columns (e.g., incompatible nba_scraper version).
             missing = [c for c in player_cols if c not in df.columns]
@@ -1498,6 +1507,7 @@ class PbP:
         self,
         player_meta: pd.DataFrame | None = None,
         game_meta: pd.DataFrame | None = None,
+        player_game_meta: pd.DataFrame | None = None,
     ) -> pd.DataFrame:
         """
         Build a per-player, per-game box aligned to an external glossary.
@@ -1542,6 +1552,7 @@ class PbP:
             exposures_df=exposures_df,
             player_meta=pm,
             game_meta=game_meta,
+            player_game_meta=player_game_meta,
         )
 
         # Normalize potential merge artifacts from player_meta

@@ -25,22 +25,16 @@ def position_to_num(pos: Any) -> float | None:
     """
     Convert a position string like 'PG', 'SG', 'G-F', 'F-C' into a numeric
     encoding. Returns NaN for unknown/missing positions.
-
-    Rules:
-      - Single positions map via _BASE_POS_NUM.
-      - Hyphen/slash separated combos (e.g. 'G-F', 'SF/PF') average the
-        numeric values of each token that is recognized.
     """
-    if not isinstance(pos, str) or not pos:
+    if not isinstance(pos, str) or not pos.strip():
         return np.nan
 
     pos_str = pos.upper().replace(" ", "")
+    if pos_str in _BASE_POS_NUM:
+        return _BASE_POS_NUM[pos_str]
+
     tokens = re.split(r"[-/]", pos_str)
-    vals = [
-        _BASE_POS_NUM[t]
-        for t in tokens
-        if t in _BASE_POS_NUM
-    ]
+    vals = [_BASE_POS_NUM[t] for t in tokens if t in _BASE_POS_NUM]
     if not vals:
         return np.nan
     return float(np.mean(vals))
@@ -315,6 +309,26 @@ def _increment_count(counter: Dict[str, float], key: str, value: float = 1.0):
     counter[key] += value
 
 
+def _valid_player_id(pid: Any) -> bool:
+    """
+    Return True if pid represents a real player id (non-null, non-zero).
+
+    Used anywhere we’re looping over lineup slots to avoid accidentally
+    treating NaN/None/0 as real players.
+    """
+    if pid is None:
+        return False
+    try:
+        if pd.isna(pid):
+            return False
+    except TypeError:
+        pass
+    try:
+        return int(pid) != 0
+    except (TypeError, ValueError):
+        return False
+
+
 def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     counts: Dict[tuple, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
@@ -351,14 +365,15 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
             assist_id = None
             if is_make:
                 assist_id = row.get("assist_id")
-                if pd.isna(assist_id) or assist_id == 0:
+                shooter = row.get("player1_id")
+                if pd.isna(assist_id) or assist_id in (0, shooter):
+                    assist_id = None
                     if "player2_id" in row.index:
                         p2 = row.get("player2_id")
-                        shooter = row.get("player1_id")
                         if not pd.isna(p2) and p2 not in (0, shooter):
                             assist_id = p2
 
-            assisted = is_make and not (assist_id is None or pd.isna(assist_id) or assist_id == 0)
+            assisted = is_make and _valid_player_id(assist_id)
 
             if assisted:
                 # Shooter-level assisted makes
@@ -369,7 +384,7 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                     _increment_count(counts[key], f"{zone}_FGM_AST")
 
                 # Passer-level AST counts (by zone + 3P)
-                ast_key = (game_id, row.get("team_id"), assist_id)
+                ast_key = (game_id, row.get("team_id"), int(assist_id))
                 _increment_count(counts[ast_key], "AST")
                 if zone:
                     _increment_count(counts[ast_key], f"AST_{zone}")
@@ -444,13 +459,9 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
             possession_after = row.get("possession_after")
             shooter_team = row.get("team_id")
 
-            if blocker and blocker != 0:
-                block_key = (game_id, block_team, blocker)
+            if _valid_player_id(blocker):
+                block_key = (game_id, block_team, int(blocker))
                 _increment_count(counts[block_key], "BLK")
-                # Heuristic:
-                # - If possession_after == block_team, we treat it as a "team recovered" block.
-                # - If possession_after == shooter_team, we treat it as a block where the opponent retained.
-                # - If possession_after is missing/ambiguous, default to BLK_Team.
                 if possession_after and possession_after == block_team:
                     _increment_count(counts[block_key], "BLK_Team")
                 elif possession_after and possession_after == shooter_team:
@@ -461,8 +472,8 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
         if row.get("is_steal") == 1:
             stealer = row.get("player2_id")
             steal_team = row.get("player2_team_id")
-            steal_key = (game_id, steal_team, stealer)
-            if stealer and stealer != 0:
+            if _valid_player_id(stealer):
+                steal_key = (game_id, steal_team, int(stealer))
                 _increment_count(counts[steal_key], "STL")
 
         subfamily = row.get("subfamily_de") or row.get("subfamily")
@@ -513,20 +524,26 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
         home_ids = [row.get(f"home_player_{i}_id") for i in range(1, 6)]
         away_ids = [row.get(f"away_player_{i}_id") for i in range(1, 6)]
         for pid in home_ids:
-            if pid and pid != 0:
-                key = (row.get("game_id"), row.get("home_team_id"), pid)
+            if _valid_player_id(pid):
+                key = (row.get("game_id"), row.get("home_team_id"), int(pid))
                 _increment_count(exposures[key], "Minutes", event_length / 60.0)
         for pid in away_ids:
-            if pid and pid != 0:
-                key = (row.get("game_id"), row.get("away_team_id"), pid)
+            if _valid_player_id(pid):
+                key = (row.get("game_id"), row.get("away_team_id"), int(pid))
                 _increment_count(exposures[key], "Minutes", event_length / 60.0)
 
         if row.get("is_block") == 1:
             block_team = row.get("player3_team_id")
-            block_ids = home_ids if block_team == row.get("home_team_id") else away_ids
+            if pd.isna(block_team) or block_team == 0:
+                block_ids = []
+            elif block_team == row.get("home_team_id"):
+                block_ids = home_ids
+            else:
+                block_ids = away_ids
+
             for pid in block_ids:
-                if pid and pid != 0:
-                    key = (row.get("game_id"), block_team, pid)
+                if _valid_player_id(pid):
+                    key = (row.get("game_id"), block_team, int(pid))
                     _increment_count(exposures[key], "TM_BLK_OnCourt")
 
         # Rebound opportunities come from missed FGs and missed last free throws.
@@ -539,13 +556,15 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
 
         if is_missed_fg or is_missed_last_ft:
             shoot_team = row.get("team_id")
+            if pd.isna(shoot_team) or shoot_team == 0:
+                continue
             home_on = home_ids
             away_on = away_ids
 
             # Offensive rebound opportunities for the shooting team
             for pid in (home_on if shoot_team == row.get("home_team_id") else away_on):
-                if pid and pid != 0:
-                    key = (row.get("game_id"), shoot_team, pid)
+                if _valid_player_id(pid):
+                    key = (row.get("game_id"), shoot_team, int(pid))
                     _increment_count(exposures[key], "OnCourt_For_OREB_Total")
 
             # Defensive rebound opportunities for the defending team
@@ -555,8 +574,8 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                 else row.get("home_team_id")
             )
             for pid in (away_on if shoot_team == row.get("home_team_id") else home_on):
-                if pid and pid != 0:
-                    key = (row.get("game_id"), opp_team, pid)
+                if _valid_player_id(pid):
+                    key = (row.get("game_id"), opp_team, int(pid))
                     _increment_count(exposures[key], "OnCourt_For_DREB_Total")
 
     poss_df = pbp._build_possessions(df, include_event_agg=True)
@@ -573,8 +592,8 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
         def_players = [poss.get(f"def_player_{i}_id") for i in range(1, 6)]
 
         for pid in off_players:
-            if pid and pid != 0:
-                key = (poss.get("game_id"), off_team, pid)
+            if _valid_player_id(pid):
+                key = (poss.get("game_id"), off_team, int(pid))
                 _increment_count(exposures[key], "POSS_OFF")
                 _increment_count(exposures[key], "OnCourt_Team_Points", points)
                 _increment_count(exposures[key], "OnCourt_Opp_Points", def_points)
@@ -586,8 +605,8 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                 _increment_count(exposures[key], "OnCourt_Team_FGA", poss.get("off_team_FGA", 0))
 
         for pid in def_players:
-            if pid and pid != 0:
-                key = (poss.get("game_id"), def_team, pid)
+            if _valid_player_id(pid):
+                key = (poss.get("game_id"), def_team, int(pid))
                 _increment_count(exposures[key], "POSS_DEF")
                 _increment_count(exposures[key], "OnCourt_Opp_Points", points)
                 _increment_count(exposures[key], "OnCourt_Team_Points", def_points)
@@ -639,10 +658,15 @@ def build_player_box(
     player_meta: Optional[pd.DataFrame] = None,
     game_meta: Optional[pd.DataFrame] = None,
     restrict_to_pbg: bool = False,
+    player_game_meta: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     merged = counts_df.merge(exposures_df, on=["game_id", "team_id", "player_id"], how="outer")
     merged.fillna(0, inplace=True)
     merged = merged[(merged["team_id"] != 0) & (merged["player_id"] != 0)]
+
+    for col in ["game_id", "team_id", "player_id"]:
+        if col in merged.columns:
+            merged[col] = merged[col].astype(int)
 
     # Identify any rows where a player has on-court points credited but no minutes.
     # In clean data this should be rare; it typically indicates a mismatch between
@@ -716,6 +740,13 @@ def build_player_box(
 
     if game_meta is not None and not game_meta.empty:
         merged = merged.merge(game_meta, on="game_id", how="left")
+
+    if player_game_meta is not None and not player_game_meta.empty:
+        merged = merged.merge(
+            player_game_meta,
+            on=["game_id", "team_id", "player_id"],
+            how="left",
+        )
 
     # Games played is always computed from Minutes, not taken from metadata.
     merged["G"] = np.where(merged["Minutes"] > 0, 1, 0)
@@ -794,6 +825,8 @@ def build_player_box(
 
     merged["fgm"] = merged.get("FGM", 0)
     merged["fga"] = merged.get("FGA", 0)
+    merged["3PM"] = merged.get("ThreePM", 0)
+    merged["3PA"] = merged.get("ThreePA", 0)
     merged["tpm"] = merged.get("ThreePM", 0)
     merged["tpa"] = merged.get("ThreePA", 0)
     merged["ftm"] = merged.get("FTM", 0)
@@ -884,7 +917,11 @@ def build_player_box(
         if col not in merged.columns:
             merged[col] = np.nan
 
-    merged["Player_Team"] = merged.get("FullName")
+    merged["Player_Team"] = np.where(
+        merged["FullName"].notna() & merged["NbaDotComID"].notna(),
+        merged["FullName"].astype(str) + " " + merged["NbaDotComID"].astype(int).astype(str),
+        merged["FullName"].astype(str),
+    )
 
     # --- FT and 3P aliases ---
     merged["FT%"] = merged["FT_pct"]
@@ -1061,6 +1098,17 @@ def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
     team_totals["USG"] = np.where(
         team_totals["POSS_OFF"] > 0,
         team_totals["PossessionsUsed"] / team_totals["POSS_OFF"],
+        0.0,
+    )
+    team_totals["POSS"] = team_totals["POSS_OFF"] + team_totals["POSS_DEF"]
+    team_totals["Pace"] = np.where(
+        team_totals["Minutes"] > 0,
+        team_totals["POSS"] / team_totals["Minutes"] * 48.0,
+        0.0,
+    )
+    team_totals["PTS_100p"] = np.where(
+        team_totals["POSS_OFF"] > 0,
+        team_totals["PTS"] / team_totals["POSS_OFF"] * 100.0,
         0.0,
     )
 
