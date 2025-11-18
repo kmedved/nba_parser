@@ -254,7 +254,8 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         # Fallback heuristic: treat long-distance FG attempts as 3s if distance is known.
         dist = df.get("shot_distance")
         if dist is not None:
-            df["is_three"] = (dist.astype(float) >= 23.0) & df["is_fg_attempt"]
+            dist_num = pd.to_numeric(dist, errors="coerce")
+            df["is_three"] = (dist_num >= 23.0) & df["is_fg_attempt"]
         else:
             df["is_three"] = False
 
@@ -280,7 +281,8 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df["is_loose_ball_foul"] = is_foul_family & sub.str.contains("loose")
     df["is_flagrant"] = is_foul_family & sub.str.contains("flagrant")
     df["is_technical"] = is_foul_family & sub.str.contains("technical")
-    df["is_charge"] = is_foul_family & sub.str.contains("charging")
+    charge_mask = sub.str.contains("charging") | sub.str.contains("charge")
+    df["is_charge"] = is_foul_family & charge_mask
 
     # --- And-ones via qualifiers ---
     quals_series = df["qualifiers"] if "qualifiers" in df.columns else pd.Series([None] * len(df), index=df.index)
@@ -1010,6 +1012,11 @@ def build_player_box(
     merged["AST_10_17ft"] = merged.get("AST_10_17", 0)
     merged["AST_18_23ft"] = merged.get("AST_18_23", 0)
     merged["AST_3P"] = merged.get("AST_3P", 0)
+
+    # --- Final Glossary Naming Alignment ---
+    # Alias on-court rebound opportunity counts to glossary-style names
+    merged["OnCourt_For_OREB_FGA"] = merged.get("OnCourt_For_OREB_Total", 0)
+    merged["OnCourt_For_DREB_FGA"] = merged.get("OnCourt_For_DREB_Total", 0)
 
     return merged
 
