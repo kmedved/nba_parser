@@ -472,7 +472,13 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
 
     for _, row in df.iterrows():
         player_id = row.get("player1_id")
-        team_id = row.get("player1_team_id")
+
+        # Prefer the normalized team_id from annotate_events (event_team +
+        # home/away mapping). Fall back to the raw player1_team_id when the
+        # normalized value is missing.
+        team_id = row.get("team_id")
+        if team_id is None or pd.isna(team_id) or team_id == 0:
+            team_id = row.get("player1_team_id")
         game_id = row.get("game_id")
 
         if not _valid_player_id(player_id):
@@ -825,11 +831,33 @@ def build_player_box(
     merged[num_cols] = merged[num_cols].fillna(0)
     merged = merged[(merged["team_id"] != 0) & (merged["player_id"] != 0)]
 
-    # Normalize team/player ids to ints, but leave game_id as-is
-    # (it’s usually a zero-padded string like '0021900151').
+    # Normalize identifiers: keep game_id as a zero-padded string and enforce
+    # integer team/player ids for consistent downstream keys.
+    if "game_id" in merged.columns:
+        merged["game_id"] = merged["game_id"].astype(str)
     for col in ["team_id", "player_id"]:
         if col in merged.columns:
             merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0).astype(int)
+
+    # Sanity check: players should not appear for multiple teams in one game.
+    dup_team = merged.groupby(["game_id", "player_id"])["team_id"].nunique()
+    bad = dup_team[dup_team > 1]
+    if strict_invariants and not bad.empty:
+        raise AssertionError(
+            "Player(s) appear for multiple teams in the same game: "
+            f"{list(bad.index)}. This usually indicates inconsistent team_id "
+            "between counts and exposures (check player1_team_id vs lineup columns)."
+        )
+    elif not bad.empty:
+        import warnings
+
+        warnings.warn(
+            "Player(s) appear for multiple teams in the same game; exposures"
+            " may be misaligned with counting stats. This usually indicates"
+            " inconsistent team_id between counts and exposures (check"
+            " player1_team_id vs lineup columns).",
+            RuntimeWarning,
+        )
 
     # Identify any rows where a player has on-court points credited but no minutes.
     # In clean data this should be rare; it typically indicates a mismatch between
@@ -888,11 +916,20 @@ def build_player_box(
         )
 
     if game_meta is not None and not game_meta.empty:
-        merged = merged.merge(game_meta, on="game_id", how="left")
+        gm = game_meta.copy()
+        if "game_id" in gm.columns:
+            gm["game_id"] = gm["game_id"].astype(str)
+        merged = merged.merge(gm, on="game_id", how="left")
 
     if player_game_meta is not None and not player_game_meta.empty:
+        pgm = player_game_meta.copy()
+        if "game_id" in pgm.columns:
+            pgm["game_id"] = pgm["game_id"].astype(str)
+        for col in ["team_id", "player_id"]:
+            if col in pgm.columns:
+                pgm[col] = pd.to_numeric(pgm[col], errors="coerce").fillna(0).astype(int)
         merged = merged.merge(
-            player_game_meta,
+            pgm,
             on=["game_id", "team_id", "player_id"],
             how="outer",
         )
@@ -1319,6 +1356,7 @@ def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
     do_not_sum = {
         "NbaDotComID",
         "PlayerID",
+        "player_id",
         "PlayerSeasonID",
         "Game_SingleGame",
         "Team_SingleGame",
@@ -1327,6 +1365,8 @@ def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
         "v_tm_id",
         "season",
         "Year",
+        "game_id",
+        "team_id",
     }
     sum_cols = [c for c in numeric_cols if c not in do_not_sum]
 
@@ -1357,6 +1397,7 @@ def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
     team_totals["NbaDotComID"] = 0
     team_totals["PlayerID"] = 0
     team_totals["PlayerSeasonID"] = 0
+    team_totals["player_id"] = 0
     team_totals["FullName"] = "TOTAL"
     team_totals["Player_Team"] = "TOTAL"
     team_totals["G"] = 1  # team played the game
