@@ -111,3 +111,35 @@ def test_metadata_passthrough(pbp_v2_game_instance):
     # The 'Starts' value from player_meta should be preserved
     assert not diawara_row.empty
     assert diawara_row["Starts"].iloc[0] == 1
+
+
+def test_player_box_glossary_cdn_game():
+    """
+    Smoke + invariants test on a CDN-era game to ensure the new pipeline
+    works for modern data as well.
+    """
+    pbp_df = pd.read_csv("test/0021900151_cdn.csv")
+    # Ensure season column exists; adjust to correct season if needed.
+    if "season" not in pbp_df.columns:
+        pbp_df["season"] = 2020
+
+    pbp = PbP(pbp_df)
+    box = pbp.player_box_glossary()
+
+    # Minutes sanity: each team should be ~game_minutes * 5
+    total_minutes = pbp_df["seconds_elapsed"].max() / 60.0
+    team_minutes = box.groupby("team_id")["Minutes"].sum()
+    for minutes in team_minutes:
+        assert abs(minutes - total_minutes * 5.0) < 1.0
+
+    # On-court scoring invariants: same as existing v2 tests
+    team_points = pbp._point_calc_team()[["team_id", "points_for"]]
+    team_points_map = dict(zip(team_points["team_id"], team_points["points_for"]))
+
+    for team_id, pts_for in team_points_map.items():
+        on_for = box.loc[box["team_id"] == team_id, "OnCourt_Team_Points"].sum()
+        opp_pts = sum(p for t, p in team_points_map.items() if t != team_id)
+        on_against = box.loc[box["team_id"] == team_id, "OnCourt_Opp_Points"].sum()
+
+        assert abs(on_for - pts_for * 5.0) < 1e-6
+        assert abs(on_against - opp_pts * 5.0) < 1e-6

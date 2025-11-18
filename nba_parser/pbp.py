@@ -28,7 +28,7 @@ class PbP:
     def __init__(self, pbp_df):
         self.df = pbp_df
 
-        # Enforce single-game input
+        # Enforce single-game input; many invariants assume one game_id.
         game_ids = self.df["game_id"].unique()
         if len(game_ids) != 1:
             raise ValueError(
@@ -1098,384 +1098,120 @@ class PbP:
                     f"{player_cols}, but these are missing: {missing}"
                 )
 
-            if df.loc[df.index[-1], "event_type_de"] in ["rebound", "turnover"]:
-                if df.loc[df.index[-1], "event_type_de"] == "turnover":
-                    if (
-                        df.loc[df.index[-1], "event_team"]
-                        == df.loc[df.index[-1], "home_team_abbrev"]
-                    ):
-                        row_df = pd.concat(
-                            [
-                                df.loc[df.index[-1], player_cols],
-                                df.loc[
-                                    df.index[-1],
-                                    [
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                ],
-                            ]
-                        )
+            last_event = df.iloc[-1]
+            event_team = last_event.get("event_team")
+            home_abbrev = last_event.get("home_team_abbrev")
+            away_abbrev = last_event.get("away_team_abbrev")
 
-                        parsed_list.extend(
-                            [
-                                pd.DataFrame(
-                                    [list(row_df)],
-                                    columns=[
-                                        "off_player_1",
-                                        "off_player_1_id",
-                                        "off_player_2",
-                                        "off_player_2_id",
-                                        "off_player_3",
-                                        "off_player_3_id",
-                                        "off_player_4",
-                                        "off_player_4_id",
-                                        "off_player_5",
-                                        "off_player_5_id",
-                                        "def_player_1",
-                                        "def_player_1_id",
-                                        "def_player_2",
-                                        "def_player_2_id",
-                                        "def_player_3",
-                                        "def_player_3_id",
-                                        "def_player_4",
-                                        "def_player_4_id",
-                                        "def_player_5",
-                                        "def_player_5_id",
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team_abbrev",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                )
-                            ]
-                        )
-                    elif (
-                        df.loc[df.index[-1], "event_team"]
-                        == df.loc[df.index[-1], "away_team_abbrev"]
-                    ):
-                        row_df = pd.concat(
-                            [
-                                df.loc[df.index[-1], player_cols],
-                                df.loc[
-                                    df.index[-1],
-                                    [
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                ],
-                            ]
-                        )
+            def append_possession(off_abbrev: str):
+                if off_abbrev not in (home_abbrev, away_abbrev):
+                    # Fallback: assume home is on offense to preserve row count
+                    off_abbrev = home_abbrev
 
-                        parsed_list.extend(
+                row_df = pd.concat(
+                    [
+                        last_event[player_cols],
+                        last_event[
                             [
-                                pd.DataFrame(
-                                    [list(row_df)],
-                                    columns=[
-                                        "def_player_1",
-                                        "def_player_1_id",
-                                        "def_player_2",
-                                        "def_player_2_id",
-                                        "def_player_3",
-                                        "def_player_3_id",
-                                        "def_player_4",
-                                        "def_player_4_id",
-                                        "def_player_5",
-                                        "def_player_5_id",
-                                        "off_player_1",
-                                        "off_player_1_id",
-                                        "off_player_2",
-                                        "off_player_2_id",
-                                        "off_player_3",
-                                        "off_player_3_id",
-                                        "off_player_4",
-                                        "off_player_4_id",
-                                        "off_player_5",
-                                        "off_player_5_id",
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team_abbrev",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                )
+                                "points_made",
+                                "home_team_abbrev",
+                                "event_team",
+                                "away_team_abbrev",
+                                "home_team_id",
+                                "away_team_id",
+                                "game_id",
+                                "game_date",
+                                "season",
                             ]
-                        )
-                if df.loc[df.index[-1], "event_type_de"] == "rebound":
-                    if (
-                        df.loc[df.index[-1], "event_team"]
-                        == df.loc[df.index[-1], "away_team_abbrev"]
-                    ):
-                        row_df = pd.concat(
-                            [
-                                df.loc[df.index[-1], player_cols],
-                                df.loc[
-                                    df.index[-1],
-                                    [
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                ],
-                            ]
-                        )
+                        ],
+                    ]
+                )
 
-                        parsed_list.extend(
-                            [
-                                pd.DataFrame(
-                                    [list(row_df)],
-                                    columns=[
-                                        "off_player_1",
-                                        "off_player_1_id",
-                                        "off_player_2",
-                                        "off_player_2_id",
-                                        "off_player_3",
-                                        "off_player_3_id",
-                                        "off_player_4",
-                                        "off_player_4_id",
-                                        "off_player_5",
-                                        "off_player_5_id",
-                                        "def_player_1",
-                                        "def_player_1_id",
-                                        "def_player_2",
-                                        "def_player_2_id",
-                                        "def_player_3",
-                                        "def_player_3_id",
-                                        "def_player_4",
-                                        "def_player_4_id",
-                                        "def_player_5",
-                                        "def_player_5_id",
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team_abbrev",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                )
-                            ]
-                        )
-
-                    elif (
-                        df.loc[df.index[-1], "event_team"]
-                        == df.loc[df.index[-1], "home_team_abbrev"]
-                    ):
-                        row_df = pd.concat(
-                            [
-                                df.loc[df.index[-1], player_cols],
-                                df.loc[
-                                    df.index[-1],
-                                    [
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                ],
-                            ]
-                        )
-
-                        parsed_list.extend(
-                            [
-                                pd.DataFrame(
-                                    [list(row_df)],
-                                    columns=[
-                                        "def_player_1",
-                                        "def_player_1_id",
-                                        "def_player_2",
-                                        "def_player_2_id",
-                                        "def_player_3",
-                                        "def_player_3_id",
-                                        "def_player_4",
-                                        "def_player_4_id",
-                                        "def_player_5",
-                                        "def_player_5_id",
-                                        "off_player_1",
-                                        "off_player_1_id",
-                                        "off_player_2",
-                                        "off_player_2_id",
-                                        "off_player_3",
-                                        "off_player_3_id",
-                                        "off_player_4",
-                                        "off_player_4_id",
-                                        "off_player_5",
-                                        "off_player_5_id",
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team_abbrev",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                )
-                            ]
-                        )
-
-            elif df.loc[df.index[-1], "event_type_de"] in ["shot", "free-throw"]:
-                if (
-                    df.loc[df.index[-1], "event_team"]
-                    == df.loc[df.index[-1], "home_team_abbrev"]
-                ):
-                    row_df = pd.concat(
-                        [
-                            df.loc[df.index[-1], player_cols],
-                            df.loc[
-                                df.index[-1],
-                                [
-                                    "points_made",
-                                    "home_team_abbrev",
-                                    "event_team",
-                                    "away_team_abbrev",
-                                    "home_team_id",
-                                    "away_team_id",
-                                    "game_id",
-                                    "game_date",
-                                    "season",
-                                ],
+                if off_abbrev == home_abbrev:
+                    parsed_list.append(
+                        pd.DataFrame(
+                            [list(row_df)],
+                            columns=[
+                                "off_player_1",
+                                "off_player_1_id",
+                                "off_player_2",
+                                "off_player_2_id",
+                                "off_player_3",
+                                "off_player_3_id",
+                                "off_player_4",
+                                "off_player_4_id",
+                                "off_player_5",
+                                "off_player_5_id",
+                                "def_player_1",
+                                "def_player_1_id",
+                                "def_player_2",
+                                "def_player_2_id",
+                                "def_player_3",
+                                "def_player_3_id",
+                                "def_player_4",
+                                "def_player_4_id",
+                                "def_player_5",
+                                "def_player_5_id",
+                                "points_made",
+                                "home_team_abbrev",
+                                "event_team_abbrev",
+                                "away_team_abbrev",
+                                "home_team_id",
+                                "away_team_id",
+                                "game_id",
+                                "game_date",
+                                "season",
                             ],
-                        ]
+                        )
                     )
-
-                    parsed_list.extend(
-                        [
-                            pd.DataFrame(
-                                [list(row_df)],
-                                columns=[
-                                    "off_player_1",
-                                    "off_player_1_id",
-                                    "off_player_2",
-                                    "off_player_2_id",
-                                    "off_player_3",
-                                    "off_player_3_id",
-                                    "off_player_4",
-                                    "off_player_4_id",
-                                    "off_player_5",
-                                    "off_player_5_id",
-                                    "def_player_1",
-                                    "def_player_1_id",
-                                    "def_player_2",
-                                    "def_player_2_id",
-                                    "def_player_3",
-                                    "def_player_3_id",
-                                    "def_player_4",
-                                    "def_player_4_id",
-                                    "def_player_5",
-                                    "def_player_5_id",
-                                    "points_made",
-                                    "home_team_abbrev",
-                                    "event_team_abbrev",
-                                    "away_team_abbrev",
-                                    "home_team_id",
-                                    "away_team_id",
-                                    "game_id",
-                                    "game_date",
-                                    "season",
-                                ],
-                            )
-                        ]
-                    )
-                elif (
-                    df.loc[df.index[-1], "event_team"]
-                    == df.loc[df.index[-1], "away_team_abbrev"]
-                ):
-                    row_df = pd.concat(
-                        [
-                            df.loc[df.index[-1], player_cols],
-                            df.loc[
-                                df.index[-1],
-                                [
-                                    "points_made",
-                                    "home_team_abbrev",
-                                    "event_team",
-                                    "away_team_abbrev",
-                                    "home_team_id",
-                                    "away_team_id",
-                                    "game_id",
-                                    "game_date",
-                                    "season",
-                                ],
+                else:
+                    parsed_list.append(
+                        pd.DataFrame(
+                            [list(row_df)],
+                            columns=[
+                                "def_player_1",
+                                "def_player_1_id",
+                                "def_player_2",
+                                "def_player_2_id",
+                                "def_player_3",
+                                "def_player_3_id",
+                                "def_player_4",
+                                "def_player_4_id",
+                                "def_player_5",
+                                "def_player_5_id",
+                                "off_player_1",
+                                "off_player_1_id",
+                                "off_player_2",
+                                "off_player_2_id",
+                                "off_player_3",
+                                "off_player_3_id",
+                                "off_player_4",
+                                "off_player_4_id",
+                                "off_player_5",
+                                "off_player_5_id",
+                                "points_made",
+                                "home_team_abbrev",
+                                "event_team_abbrev",
+                                "away_team_abbrev",
+                                "home_team_id",
+                                "away_team_id",
+                                "game_id",
+                                "game_date",
+                                "season",
                             ],
-                        ]
+                        )
                     )
 
-                    parsed_list.extend(
-                        [
-                            pd.DataFrame(
-                                [list(row_df)],
-                                columns=[
-                                    "def_player_1",
-                                    "def_player_1_id",
-                                    "def_player_2",
-                                    "def_player_2_id",
-                                    "def_player_3",
-                                    "def_player_3_id",
-                                    "def_player_4",
-                                    "def_player_4_id",
-                                    "def_player_5",
-                                    "def_player_5_id",
-                                    "off_player_1",
-                                    "off_player_1_id",
-                                    "off_player_2",
-                                    "off_player_2_id",
-                                    "off_player_3",
-                                    "off_player_3_id",
-                                    "off_player_4",
-                                    "off_player_4_id",
-                                    "off_player_5",
-                                    "off_player_5_id",
-                                    "points_made",
-                                    "home_team_abbrev",
-                                    "event_team_abbrev",
-                                    "away_team_abbrev",
-                                    "home_team_id",
-                                    "away_team_id",
-                                    "game_id",
-                                    "game_date",
-                                    "season",
-                                ],
-                            )
-                        ]
-                    )
+            # Determine offense using the same heuristics as _build_possessions.
+            ev_type = last_event.get("event_type_de")
+            off_abbrev = event_team
+            if ev_type == "rebound":
+                if event_team == home_abbrev:
+                    off_abbrev = away_abbrev
+                elif event_team == away_abbrev:
+                    off_abbrev = home_abbrev
+
+            append_possession(off_abbrev)
 
         return parsed_list
 
@@ -1634,6 +1370,13 @@ class PbP:
 
         if event_aggs:
             agg_df = pd.DataFrame(event_aggs)
+
+            # parse_possessions may drop segments; align aggregates to the
+            # possession rows before assignment.
+            if len(agg_df) != len(poss_df):
+                agg_df = agg_df.reindex(range(len(poss_df)))
+
+            agg_df = agg_df.reset_index(drop=True)
 
             # Attach team IDs and abbreviations inferred in the event_aggs loop
             poss_df["off_team_id"] = agg_df["off_team_id"].values
