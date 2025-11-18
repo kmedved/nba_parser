@@ -10,14 +10,14 @@ import pandas as pd
 
 # Mapping for base positions to numeric slots.
 # 1=PG, 2=SG, 3=SF, 4=PF, 5=C. "G" and "F" are midpoints.
-_BASE_POS_NUM = {
+_BASE_POS_NUM: Dict[str, float] = {
     "PG": 1.0,
     "SG": 2.0,
     "SF": 3.0,
     "PF": 4.0,
     "C": 5.0,
-    "G": 1.5,   # generic guard between PG/SG
-    "F": 3.5,   # generic forward between SF/PF
+    "G": 1.5,  # generic guard between PG/SG
+    "F": 3.5,  # generic forward between SF/PF
 }
 
 
@@ -39,6 +39,7 @@ def position_to_num(pos: Any) -> float | None:
         return np.nan
     return float(np.mean(vals))
 
+
 ZONE_BINS: List[Tuple[float, float, str]] = [
     (0.0, 3.0, "0_3"),
     (3.0, 9.0, "4_9"),
@@ -48,6 +49,10 @@ ZONE_BINS: List[Tuple[float, float, str]] = [
 
 
 def classify_shot_zone(shot_distance: float | None, area: str | None) -> Optional[str]:
+    """
+    Backwards‑compatible single‑shot classifier (kept for any call sites that
+    still use it directly). The pipeline should prefer _vectorized_shot_zone.
+    """
     if shot_distance is not None and not pd.isna(shot_distance):
         d = float(shot_distance)
         for lower, upper, label in ZONE_BINS:
@@ -121,6 +126,7 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     # Preserve original upstream family (e.g., "2pt", "3pt") for debugging.
     if "family" in df.columns and "family_raw" not in df.columns:
         df["family_raw"] = df["family"]
+
     # --- Subfamily normalization ---
     if "subfamily_de" in df.columns:
         subfam = df["subfamily_de"].fillna("")
@@ -147,6 +153,31 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         fam_src = pd.Series([""] * len(df), index=df.index)
 
     fam = fam_src.astype(str).str.lower().str.replace("-", "_", regex=False)
+
+    # --- V2 API Event Action Type (for robust foul classification) ---
+    action_type = df.get("eventmsgactiontype")
+    if action_type is not None:
+        try:
+            action_type = pd.to_numeric(action_type, errors="coerce")
+            # Use Int64 (nullable integer type) if possible for robust handling of NaNs
+            if action_type.isnull().any():
+                try:
+                    action_type = action_type.astype("Int64")
+                except TypeError:
+                    # pandas too old, keep as float
+                    pass
+        except Exception:
+            # If conversion fails completely, set to None
+            action_type = None
+
+    # Helper to safely check action type equality or inclusion
+    def _check_action_type(val_or_list):
+        if action_type is None:
+            return pd.Series(False, index=df.index)
+        if isinstance(val_or_list, (list, set, tuple)):
+            return action_type.isin(val_or_list)
+        return action_type == val_or_list
+
     df["family"] = fam
 
     # --- Event team id ---
@@ -226,21 +257,26 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     # Identify the last free-throw attempt in a trip so rebound opportunities
     # can include missed end-of-trip free throws.
+
+    # Fallback heuristic based on text
+    sub_lower = subfam.astype(str).str.lower()
+    heuristic_last_ft = df["is_ft"] & (
+        sub_lower.str.contains("1 of 1")
+        | sub_lower.str.contains("2 of 2")
+        | sub_lower.str.contains("3 of 3")
+    )
+
     if "ft_n" in df.columns and "ft_m" in df.columns:
         try:
             ft_n = df["ft_n"].fillna(0).astype(int)
             ft_m = df["ft_m"].fillna(0).astype(int)
             df["is_last_ft"] = (ft_n == ft_m) & (ft_n > 0)
         except (ValueError, TypeError):
-            df["is_last_ft"] = False
+            # If conversion fails (e.g., bad data), use the heuristic fallback
+            df["is_last_ft"] = heuristic_last_ft
     else:
-        # Fallback heuristic when counters are missing: look for "X of X" text.
-        sub_lower = subfam.astype(str).str.lower()
-        df["is_last_ft"] = df["is_ft"] & (
-            sub_lower.str.contains("1 of 1")
-            | sub_lower.str.contains("2 of 2")
-            | sub_lower.str.contains("3 of 3")
-        )
+        # Fallback heuristic when counters are missing
+        df["is_last_ft"] = heuristic_last_ft
 
     if "is_o_rebound" not in df.columns:
         df["is_o_rebound"] = 0
@@ -255,7 +291,8 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         dist = df.get("shot_distance")
         if dist is not None:
             dist_num = pd.to_numeric(dist, errors="coerce")
-            df["is_three"] = (dist_num >= 23.0) & df["is_fg_attempt"]
+            # Use 23.75 feet as the threshold for above-the-break threes.
+            df["is_three"] = (dist_num >= 23.75) & df["is_fg_attempt"]
         else:
             df["is_three"] = False
 
@@ -269,8 +306,12 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     is_steal_flag = steal_col.fillna(0).astype(int) == 1
 
     sub_lower = subfam.astype(str).str.lower()
-    # Some feeds may explicitly label "live-ball" in text.
-    sub_live_flag = sub_lower.str.contains("live")
+    # Expanded criteria for live-ball turnovers based on common subfamily descriptions.
+    sub_live_flag = (
+        sub_lower.str.contains("live")
+        | sub_lower.str.contains("bad pass")
+        | sub_lower.str.contains("lost ball")
+    )
 
     df["is_turnover_live"] = is_tov_family & (is_steal_flag | sub_live_flag)
     df["is_turnover_dead"] = is_tov_family & ~df["is_turnover_live"]
@@ -278,15 +319,45 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     # --- Foul flavors ---
     is_foul_family = fam == "foul"
     sub = sub_lower
-    df["is_loose_ball_foul"] = is_foul_family & sub.str.contains("loose")
-    df["is_flagrant"] = is_foul_family & sub.str.contains("flagrant")
-    df["is_technical"] = is_foul_family & sub.str.contains("technical")
+
+    # Loose ball foul (v2 type 6)
+    df["is_loose_ball_foul"] = is_foul_family & (
+        sub.str.contains("loose") | _check_action_type(6)
+    )
+
+    # Flagrant fouls (v2 types 11-15, 27-29)
+    flagrant_types = {11, 12, 13, 14, 15, 27, 28, 29}
+    df["is_flagrant"] = is_foul_family & (
+        sub.str.contains("flagrant") | _check_action_type(flagrant_types)
+    )
+
+    # Technical fouls (v2 types 16, 18-20, 25, 30).
+    technical_types = {16, 18, 19, 20, 25, 30}
+    df["is_technical"] = is_foul_family & (
+        sub.str.contains("technical") | _check_action_type(technical_types)
+    )
+
+    # Charging/Offensive fouls (v2 type 2)
     charge_mask = sub.str.contains(r"\bcharging\b") | sub.str.contains(r"\bcharge\b")
-    df["is_charge"] = is_foul_family & charge_mask
+    df["is_charge"] = is_foul_family & (charge_mask | _check_action_type(2))
 
     # --- And-ones via qualifiers ---
-    quals_series = df["qualifiers"] if "qualifiers" in df.columns else pd.Series([None] * len(df), index=df.index)
+    if "qualifiers" in df.columns:
+        quals_series = df["qualifiers"]
+    else:
+        quals_series = pd.Series([None] * len(df), index=df.index)
     df["is_and_one"] = _vectorized_is_and_one(quals_series)
+
+    # --- Goaltends (Centralized) ---
+    goaltend_flag = sub.str.contains("goaltend")
+    # CDN feeds may encode goaltends via qualifiers instead of subfamily.
+    if "qualifiers" in df.columns:
+        # Handle various qualifier formats (list, string, or NaN) robustly
+        quals_str = df["qualifiers"].apply(
+            lambda x: str(x).lower() if not pd.isna(x) else ""
+        )
+        goaltend_flag = goaltend_flag | quals_str.str.contains("goaltend")
+    df["is_goaltend"] = goaltend_flag
 
     # --- Shot zones ---
     shot_mask = df["is_fg_attempt"]
@@ -300,14 +371,16 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df["off_team_id"] = np.where(off_mask, df["team_id"], np.nan)
     df["def_team_id"] = np.where(
         off_mask,
-        np.where(df["off_team_id"] == df["home_team_id"], df["away_team_id"], df["home_team_id"]),
+        np.where(
+            df["off_team_id"] == df["home_team_id"], df["away_team_id"], df["home_team_id"]
+        ),
         np.nan,
     )
 
     return df
 
 
-def _increment_count(counter: Dict[str, float], key: str, value: float = 1.0):
+def _increment_count(counter: Dict[str, float], key: str, value: float = 1.0) -> None:
     counter[key] += value
 
 
@@ -320,14 +393,16 @@ def _valid_player_id(pid: Any) -> bool:
     """
     if pid is None:
         return False
+
+    # Use pandas.isna for robust checking of NaN/None across types
+    if pd.isna(pid):
+        return False
+
     try:
-        if pd.isna(pid):
-            return False
-    except TypeError:
-        pass
-    try:
+        # Attempt to convert to integer and check if it's non-zero
         return int(pid) != 0
     except (TypeError, ValueError):
+        # Handle cases where conversion fails (e.g., strings that are not numbers)
         return False
 
 
@@ -339,8 +414,10 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
         player_id = row.get("player1_id")
         team_id = row.get("player1_team_id")
         game_id = row.get("game_id")
-        if pd.isna(player_id) or player_id == 0:
+
+        if not _valid_player_id(player_id):
             player_id = None
+
         key = (game_id, team_id, player_id)
 
         if row.get("is_fg_attempt"):
@@ -368,11 +445,11 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
             if is_make:
                 assist_id = row.get("assist_id")
                 shooter = row.get("player1_id")
-                if pd.isna(assist_id) or assist_id in (0, shooter):
+                if not _valid_player_id(assist_id) or assist_id == shooter:
                     assist_id = None
                     if "player2_id" in row.index:
                         p2 = row.get("player2_id")
-                        if not pd.isna(p2) and p2 not in (0, shooter):
+                        if _valid_player_id(p2) and p2 != shooter:
                             assist_id = p2
 
             assisted = is_make and _valid_player_id(assist_id)
@@ -386,7 +463,8 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                     _increment_count(counts[key], f"{zone}_FGM_AST")
 
                 # Passer-level AST counts (by zone + 3P)
-                ast_key = (game_id, row.get("team_id"), int(assist_id))
+                # The assister is on the same team as the shooter (player1_team_id)
+                ast_key = (game_id, row.get("player1_team_id"), int(assist_id))
                 _increment_count(counts[ast_key], "AST")
                 if zone:
                     _increment_count(counts[ast_key], f"AST_{zone}")
@@ -419,7 +497,7 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
             elif row.get("points_made", 0) > 0:
                 _increment_count(counts[key], "FTM")
 
-        if not pd.isna(player_id):
+        if _valid_player_id(player_id):
             _increment_count(counts[key], "PTS", row.get("points_made", 0))
 
         if row.get("is_o_rebound") == 1:
@@ -427,14 +505,14 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
         if row.get("is_d_rebound") == 1:
             _increment_count(counts[key], "DREB")
 
-        if row.get("family") == "turnover" and not pd.isna(player_id):
+        if row.get("family") == "turnover" and _valid_player_id(player_id):
             _increment_count(counts[key], "TOV")
             if row.get("is_turnover_live"):
                 _increment_count(counts[key], "TOV_Live")
             else:
                 _increment_count(counts[key], "TOV_Dead")
 
-        if row.get("family") == "foul" and not pd.isna(player_id):
+        if row.get("family") == "foul" and _valid_player_id(player_id):
             # Player 1 commits the foul
             _increment_count(counts[key], "PF")
             if row.get("is_loose_ball_foul"):
@@ -446,7 +524,7 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
 
             fouled = row.get("player2_id")
             fouled_team = row.get("player2_team_id")
-            if fouled and not pd.isna(fouled) and fouled_team and not pd.isna(fouled_team):
+            if _valid_player_id(fouled) and not pd.isna(fouled_team):
                 foul_key = (game_id, fouled_team, fouled)
                 # Generic foul drawn
                 _increment_count(counts[foul_key], "PF_DRAWN")
@@ -461,7 +539,7 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
             possession_after = row.get("possession_after")
             shooter_team = row.get("team_id")
 
-            if _valid_player_id(blocker):
+            if _valid_player_id(blocker) and not pd.isna(block_team):
                 block_key = (game_id, block_team, int(blocker))
                 _increment_count(counts[block_key], "BLK")
                 if possession_after and possession_after == block_team:
@@ -469,43 +547,49 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                 elif possession_after and possession_after == shooter_team:
                     _increment_count(counts[block_key], "BLK_Opp")
                 else:
+                    # If possession_after is unknown, default to BLK_Team (assume defensive recovery).
                     _increment_count(counts[block_key], "BLK_Team")
 
         if row.get("is_steal") == 1:
             stealer = row.get("player2_id")
             steal_team = row.get("player2_team_id")
-            if _valid_player_id(stealer):
+            if _valid_player_id(stealer) and not pd.isna(steal_team):
                 steal_key = (game_id, steal_team, int(stealer))
                 _increment_count(counts[steal_key], "STL")
 
-        subfamily = row.get("subfamily_de") or row.get("subfamily")
-        goaltend_flag = isinstance(subfamily, str) and "goaltend" in subfamily.lower()
+        # Use the centralized is_goaltend flag
+        if row.get("is_goaltend"):
+            # Goaltends are typically credited to player3 (defensive) or player1 (offensive violation)
+            # Determine the responsible player and team.
+            goaltend_player = None
+            goaltend_team = None
 
-        # CDN feeds may encode goaltends via qualifiers instead of subfamily.
-        if not goaltend_flag:
-            quals = row.get("qualifiers")
-            if isinstance(quals, str):
-                goaltend_flag = "goaltend" in quals.lower()
-            else:
-                try:
-                    goaltend_flag = any("goaltend" in str(q).lower() for q in quals)
-                except TypeError:
-                    pass
+            # Defensive goaltending (player3)
+            p3_id = row.get("player3_id")
+            if _valid_player_id(p3_id):
+                goaltend_player = p3_id
+                goaltend_team = row.get("player3_team_id")
+            # Offensive goaltending/basket interference (player1)
+            elif _valid_player_id(player_id):
+                goaltend_player = player_id
+                goaltend_team = team_id
 
-        if goaltend_flag:
-            goaltend_player = row.get("player3_id") or row.get("player1_id")
-            goaltend_team = row.get("player3_team_id") or row.get("player1_team_id")
-            gt_key = (game_id, goaltend_team, goaltend_player)
-            _increment_count(counts[gt_key], "Goaltends")
+            if (
+                _valid_player_id(goaltend_player)
+                and goaltend_team is not None
+                and not pd.isna(goaltend_team)
+            ):
+                gt_key = (game_id, goaltend_team, int(goaltend_player))
+                _increment_count(counts[gt_key], "Goaltends")
 
-        if row.get("is_fg_make") and row.get("is_and_one") and not pd.isna(player_id):
+        if row.get("is_fg_make") and row.get("is_and_one") and _valid_player_id(player_id):
             _increment_count(counts[key], "AndOnes")
 
     records: List[Dict[str, Any]] = []
     for (game_id, team_id, player_id), vals in counts.items():
-        if player_id is None or player_id == 0:
+        if not _valid_player_id(player_id):
             continue
-        record = {
+        record: Dict[str, Any] = {
             "game_id": game_id,
             "team_id": team_id,
             "player_id": player_id,
@@ -1118,11 +1202,35 @@ def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
         0.0,
     )
     team_totals["POSS"] = team_totals["POSS_OFF"] + team_totals["POSS_DEF"]
+
+    # Use offensive possessions for team pace so we don't double-count.
     team_totals["Pace"] = np.where(
         team_totals["Minutes"] > 0,
-        team_totals["POSS"] / team_totals["Minutes"] * 48.0,
+        team_totals["POSS_OFF"] / team_totals["Minutes"] * 48.0,
         0.0,
     )
+
+    # Recompute team-level shooting percentages (avoid summed player rates).
+    team_totals["FGPct"] = np.where(
+        team_totals["FGA"] > 0,
+        team_totals["FGM"] / team_totals["FGA"],
+        0.0,
+    )
+    team_totals["FT_pct"] = np.where(
+        team_totals["FTA"] > 0,
+        team_totals["FTM"] / team_totals["FTA"],
+        0.0,
+    )
+    team_totals["FT%"] = team_totals["FT_pct"]
+
+    if "ThreePM" in team_totals.columns and "ThreePA" in team_totals.columns:
+        team_totals["ThreeP_pct"] = np.where(
+            team_totals["ThreePA"] > 0,
+            team_totals["ThreePM"] / team_totals["ThreePA"],
+            0.0,
+        )
+        team_totals["3PPct"] = team_totals["ThreeP_pct"]
+
     team_totals["PTS_100p"] = np.where(
         team_totals["POSS_OFF"] > 0,
         team_totals["PTS"] / team_totals["POSS_OFF"] * 100.0,

@@ -7,6 +7,7 @@ from .box_glossary import (
     accumulate_player_counts,
     compute_on_court_exposures,
     build_player_box,
+    append_team_totals,
 )
 
 # NOTE:
@@ -106,7 +107,8 @@ class PbP:
             self.df.loc[away_pos_idx, "away_possession"] = 1
 
         else:
-            # --- LEGACY HEURISTIC POSSESSION FLAGS (existing code path) ---
+            # --- LEGACY HEURISTIC POSSESSION FLAGS (existing v2-style code path) ---
+
             # calculating made shot possessions
             self.df["home_possession"] = np.where(
                 (self.df.event_team == self.df.home_team_abbrev)
@@ -114,6 +116,7 @@ class PbP:
                 1,
                 0,
             )
+
             # calculating turnover possessions
             self.df["home_possession"] = np.where(
                 (self.df.event_team == self.df.home_team_abbrev)
@@ -121,6 +124,7 @@ class PbP:
                 1,
                 self.df["home_possession"],
             )
+
             # calculating defensive rebound possessions
             self.df["home_possession"] = np.where(
                 (
@@ -137,31 +141,68 @@ class PbP:
                 1,
                 self.df["home_possession"],
             )
-            # calculating final free throw possessions
+
+            # Determine if it's the last free throw using structured data if available
+            is_last_ft = pd.Series(False, index=self.df.index)
+
+            # Ensure descriptions are treated as strings and handle NaNs
+            homedesc = self.df.get("homedescription", pd.Series(index=self.df.index)).fillna("").astype(str)
+            visitordesc = self.df.get("visitordescription", pd.Series(index=self.df.index)).fillna("").astype(str)
+
+            # Heuristic fallback using string matching
+            string_match_last_ft = (
+                homedesc.str.contains("Free Throw 1 of 1")
+                | homedesc.str.contains("Free Throw 2 of 2")
+                | homedesc.str.contains("Free Throw 3 of 3")
+                | visitordesc.str.contains("Free Throw 1 of 1")
+                | visitordesc.str.contains("Free Throw 2 of 2")
+                | visitordesc.str.contains("Free Throw 3 of 3")
+            )
+
+            if "ft_n" in self.df.columns and "ft_m" in self.df.columns:
+                try:
+                    ft_n = self.df["ft_n"].fillna(0).astype(int)
+                    ft_m = self.df["ft_m"].fillna(0).astype(int)
+                    structured_last_ft = (ft_n == ft_m) & (ft_n > 0)
+                    # Use structured data if valid, otherwise fallback to string match
+                    is_last_ft = np.where(
+                        (ft_n > 0) & (ft_m > 0),
+                        structured_last_ft,
+                        string_match_last_ft,
+                    )
+                except (ValueError, TypeError):
+                    # Fallback if structured data is malformed
+                    is_last_ft = string_match_last_ft
+            else:
+                # Fallback if columns are missing
+                is_last_ft = string_match_last_ft
+
+            # calculating final free throw possessions (Home)
             self.df["home_possession"] = np.where(
                 (self.df.event_team == self.df.home_team_abbrev)
-                & (
-                    (self.df.homedescription.str.contains("Free Throw 2 of 2"))
-                    | (self.df.homedescription.str.contains("Free Throw 3 of 3"))
-                ),
+                & (self.df.event_type_de == "free-throw")
+                & is_last_ft,
                 1,
                 self.df["home_possession"],
             )
-            # calculating made shot possessions
+
+            # calculating made shot possessions (Away)
             self.df["away_possession"] = np.where(
                 (self.df.event_team == self.df.away_team_abbrev)
                 & (self.df.event_type_de == "shot"),
                 1,
                 0,
             )
-            # calculating turnover possessions
+
+            # calculating turnover possessions (Away)
             self.df["away_possession"] = np.where(
                 (self.df.event_team == self.df.away_team_abbrev)
                 & (self.df.event_type_de == "turnover"),
                 1,
                 self.df["away_possession"],
             )
-            # calculating defensive rebound possessions
+
+            # calculating defensive rebound possessions (Away)
             self.df["away_possession"] = np.where(
                 (
                     (self.df.event_team == self.df.home_team_abbrev)
@@ -177,13 +218,12 @@ class PbP:
                 1,
                 self.df["away_possession"],
             )
-            # calculating final free throw possessions
+
+            # calculating final free throw possessions (Away)
             self.df["away_possession"] = np.where(
                 (self.df.event_team == self.df.away_team_abbrev)
-                & (
-                    (self.df.visitordescription.str.contains("Free Throw 2 of 2"))
-                    | (self.df.visitordescription.str.contains("Free Throw 3 of 3"))
-                ),
+                & (self.df.event_type_de == "free-throw")
+                & is_last_ft,
                 1,
                 self.df["away_possession"],
             )
@@ -1055,7 +1095,7 @@ class PbP:
         return plus_minus_df[["team_id", "game_id", "points_against", "plus_minus"]]
 
     @staticmethod
-    def _get_off_def_teams(last_event):
+    def _get_off_def_teams(last_event: pd.Series) -> tuple[str, str]:
         """
         Determine offensive and defensive team abbreviations for a possession
         based on the last event in that possession.
@@ -1072,21 +1112,40 @@ class PbP:
         ev_type = last_event.get("family") or last_event.get("event_type_de")
         if isinstance(ev_type, str):
             ev_type = ev_type.replace("-", "_").lower()
+        else:
+            ev_type = ""
 
         # Default offense/defense mapping mirrors existing _build_possessions logic:
         # - shot / free_throw / turnover: offense is event_team
-        # - rebound: offense is the other team
+        # - rebound: depends on OREB/DREB flags
         # - fallback: treat event_team as offense
         if ev_type in ("shot", "miss_shot", "missed_shot", "free_throw", "turnover"):
             off_abbrev = ev_team
         elif ev_type == "rebound":
-            if ev_team == home_abbrev:
-                off_abbrev = away_abbrev
-            elif ev_team == away_abbrev:
-                off_abbrev = home_abbrev
-            else:
-                # If we can't match, fall back to event team
+            # Check rebound type flags (Critical Fix)
+            is_d_rebound = last_event.get("is_d_rebound") == 1
+            is_o_rebound = last_event.get("is_o_rebound") == 1
+
+            if is_o_rebound:
+                # Offensive rebound: the rebounding team is offense.
                 off_abbrev = ev_team
+            elif is_d_rebound:
+                # Defensive rebound: the rebounding team is defense, the other team was offense.
+                if ev_team == home_abbrev:
+                    off_abbrev = away_abbrev
+                elif ev_team == away_abbrev:
+                    off_abbrev = home_abbrev
+                else:
+                    # If we can't match, fall back to event team
+                    off_abbrev = ev_team
+            else:
+                # Ambiguous/Team rebound: Treat similar to DREB for determining who *had* the ball.
+                if ev_team == home_abbrev:
+                    off_abbrev = away_abbrev
+                elif ev_team == away_abbrev:
+                    off_abbrev = home_abbrev
+                else:
+                    off_abbrev = ev_team
         else:
             off_abbrev = ev_team
 
@@ -1111,25 +1170,35 @@ class PbP:
         return off_abbrev, def_abbrev
 
     @staticmethod
-    def parse_possessions(poss_list):
+    def parse_possessions(poss_list: list[pd.DataFrame]) -> tuple[list[pd.DataFrame], list[int]]:
         """
-        a function to parse each possession and create one row for offense team
-        and defense team
+        Parse each possession segment and create one row for offense team
+        and defense team lineups.
 
         Inputs:
-        poss_list   - list of dataframes each one representing one possession
+            poss_list   - list of dataframes each one representing one possession
 
         Outputs:
-        parsed_list  - list of dataframes where each list inside represents the players on
-                       off and def and points score for each possession
-        used_indices - list of integer indices into poss_list corresponding to parsed_list
+            parsed_list  - list of single-row dataframes, one per possession
+            used_indices - list of integer indices into poss_list corresponding to parsed_list
         """
-        parsed_list = []
-        used_indices = []
+        parsed_list: list[pd.DataFrame] = []
+        used_indices: list[int] = []
+
+        # Define metadata columns to carry through
+        metadata_cols = [
+            "points_made",
+            "home_team_abbrev",
+            "event_team",
+            "away_team_abbrev",
+            "home_team_id",
+            "away_team_id",
+            "game_id",
+            "game_date",
+            "season",
+        ]
 
         # Explicit list of player columns so we do not rely on column order
-        # in the source DataFrame. This matches the expected order used when
-        # constructing off_player_* and def_player_* fields below.
         player_cols = [
             "home_player_1", "home_player_1_id",
             "home_player_2", "home_player_2_id",
@@ -1142,6 +1211,15 @@ class PbP:
             "away_player_4", "away_player_4_id",
             "away_player_5", "away_player_5_id",
         ]
+
+        # Dynamically generate column mappings for renaming
+        home_to_off = {c: c.replace("home_", "off_") for c in player_cols if "home_" in c}
+        away_to_def = {c: c.replace("away_", "def_") for c in player_cols if "away_" in c}
+        home_to_def = {c: c.replace("home_", "def_") for c in player_cols if "home_" in c}
+        away_to_off = {c: c.replace("away_", "off_") for c in player_cols if "away_" in c}
+
+        # Combine player and metadata columns for selection
+        selected_cols = player_cols + metadata_cols
 
         for seg_idx, df in enumerate(poss_list):
             if df.empty:
@@ -1170,107 +1248,31 @@ class PbP:
             # Determine offense/defense using centralized helper
             off_abbrev, _ = PbP._get_off_def_teams(last_event)
 
-            def append_possession(off_abbrev: str):
+            def append_possession(off_abbrev_inner: str) -> None:
                 home_abbrev = last_event.get("home_team_abbrev")
                 away_abbrev = last_event.get("away_team_abbrev")
 
-                if off_abbrev not in (home_abbrev, away_abbrev):
+                if off_abbrev_inner not in (home_abbrev, away_abbrev):
                     # Fallback: assume home is on offense to preserve row count
-                    off_abbrev = home_abbrev
+                    off_abbrev_inner = home_abbrev
 
-                row_df = pd.concat(
-                    [
-                        last_event[player_cols],
-                        last_event[
-                            [
-                                "points_made",
-                                "home_team_abbrev",
-                                "event_team",
-                                "away_team_abbrev",
-                                "home_team_id",
-                                "away_team_id",
-                                "game_id",
-                                "game_date",
-                                "season",
-                            ]
-                        ],
-                    ]
-                )
+                # Create a DataFrame from the last event's relevant columns
+                # Handle potential missing columns gracefully
+                data = {col: last_event.get(col) for col in selected_cols}
+                row_df = pd.DataFrame([data])
 
-                if off_abbrev == home_abbrev:
-                    parsed_list.append(
-                        pd.DataFrame(
-                            [list(row_df)],
-                            columns=[
-                                "off_player_1",
-                                "off_player_1_id",
-                                "off_player_2",
-                                "off_player_2_id",
-                                "off_player_3",
-                                "off_player_3_id",
-                                "off_player_4",
-                                "off_player_4_id",
-                                "off_player_5",
-                                "off_player_5_id",
-                                "def_player_1",
-                                "def_player_1_id",
-                                "def_player_2",
-                                "def_player_2_id",
-                                "def_player_3",
-                                "def_player_3_id",
-                                "def_player_4",
-                                "def_player_4_id",
-                                "def_player_5",
-                                "def_player_5_id",
-                                "points_made",
-                                "home_team_abbrev",
-                                "event_team_abbrev",
-                                "away_team_abbrev",
-                                "home_team_id",
-                                "away_team_id",
-                                "game_id",
-                                "game_date",
-                                "season",
-                            ],
-                        )
-                    )
+                # Rename 'event_team' to 'event_team_abbrev' for consistency if needed
+                if "event_team" in row_df.columns and "event_team_abbrev" not in row_df.columns:
+                    row_df = row_df.rename(columns={"event_team": "event_team_abbrev"})
+
+                if off_abbrev_inner == home_abbrev:
+                    # Home team on offense
+                    row_df = row_df.rename(columns={**home_to_off, **away_to_def})
                 else:
-                    parsed_list.append(
-                        pd.DataFrame(
-                            [list(row_df)],
-                            columns=[
-                                "def_player_1",
-                                "def_player_1_id",
-                                "def_player_2",
-                                "def_player_2_id",
-                                "def_player_3",
-                                "def_player_3_id",
-                                "def_player_4",
-                                "def_player_4_id",
-                                "def_player_5",
-                                "def_player_5_id",
-                                "off_player_1",
-                                "off_player_1_id",
-                                "off_player_2",
-                                "off_player_2_id",
-                                "off_player_3",
-                                "off_player_3_id",
-                                "off_player_4",
-                                "off_player_4_id",
-                                "off_player_5",
-                                "off_player_5_id",
-                                "points_made",
-                                "home_team_abbrev",
-                                "event_team_abbrev",
-                                "away_team_abbrev",
-                                "home_team_id",
-                                "away_team_id",
-                                "game_id",
-                                "game_date",
-                                "season",
-                            ],
-                        )
-                    )
+                    # Away team on offense
+                    row_df = row_df.rename(columns={**away_to_off, **home_to_def})
+
+                parsed_list.append(row_df)
 
             append_possession(off_abbrev)
 
@@ -1302,14 +1304,47 @@ class PbP:
                 shift_dfs.append(seg)
             past_index = i
 
-        parsed_possessions, used_indices = self.parse_possessions(shift_dfs)
+        # --- NEW: normalize segments so parse_possessions and event_aggs see the same slice ---
+        valid_end_types = {
+            "rebound",
+            "turnover",
+            "shot",
+            "free-throw",
+            "free_throw",
+            "missed_shot",
+            "miss_shot",
+        }
+
+        normalized_segments: list[pd.DataFrame] = []
+        for seg in shift_dfs:
+            if seg.empty or "event_type_de" not in seg.columns:
+                normalized_segments.append(seg)
+                continue
+
+            last_type = str(seg["event_type_de"].iloc[-1])
+            if last_type in valid_end_types:
+                normalized_segments.append(seg)
+                continue
+
+            mask = seg["event_type_de"].isin(valid_end_types)
+            if not mask.any():
+                # No terminal events in this stretch; treat as empty so
+                # it won't generate a possession row.
+                normalized_segments.append(seg.iloc[0:0])
+                continue
+
+            last_idx = mask[mask].index[-1]
+            normalized_segments.append(seg.loc[: last_idx].copy())
+
+        # Use normalized segments everywhere downstream
+        parsed_possessions, used_indices = self.parse_possessions(normalized_segments)
 
         # If no possessions were detected, return an empty DataFrame
         if not parsed_possessions:
             return pd.DataFrame()
 
         event_aggs = []
-        for poss_df in shift_dfs:
+        for poss_df in normalized_segments:
             poss_events = poss_df  # already annotated via pbp_df
             if poss_events.empty:
                 event_aggs.append(
@@ -1605,6 +1640,23 @@ class PbP:
         self._check_on_court_minutes_consistency(box_df)
 
         return box_df
+
+    def player_box_glossary_with_totals(
+        self,
+        player_meta: pd.DataFrame | None = None,
+        game_meta: pd.DataFrame | None = None,
+        player_game_meta: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
+        """
+        Convenience wrapper: build the per-player glossary box and append one
+        'TOTAL' row per (game_id, team_id).
+        """
+        box = self.player_box_glossary(
+            player_meta=player_meta,
+            game_meta=game_meta,
+            player_game_meta=player_game_meta,
+        )
+        return append_team_totals(box)
 
     def _check_on_court_points_consistency(self, box: pd.DataFrame, tol: float = 1e-6) -> None:
         """
