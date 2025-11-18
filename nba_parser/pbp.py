@@ -26,10 +26,8 @@ class PbP:
         self.away_team_id = pbp_df["away_team_id"].unique()[0]
         self.season = pbp_df["season"].unique()[0]
 
-        # done to handle PbP classes created from imported csv files versus
-        # those that are created by nba_scraper that handles game_date as a
-        # proper datetime dtype
-        # Handle both string and datetime-like game_date formats.
+        # Handle PbP classes created from imported CSV files versus those
+        # created by nba_scraper that handles game_date as a proper datetime.
         if self.df["game_date"].dtypes == "O":
             raw = str(pbp_df["game_date"].unique()[0])
             parsed = None
@@ -1951,21 +1949,17 @@ class PbP:
 
     def rapm_possessions(self):
         """
-        Extract out all the rapm possessions to be able to run a RAPM
-        regression on later.
+        Extract out all the RAPM possessions as a DataFrame.
 
-        Uses the event-level scoring computed by _build_possessions(), which
-        returns points_for_offense / points_for_defense for each possession.
+        This uses the same event-level scoring logic as the on-court glossary:
+        - points_for_offense: total offensive points scored in the possession.
+        - points_for_defense: total points scored by the opponent in the possession.
 
-        For backward compatibility, this also exposes a points_made column
-        equal to points_for_offense.
+        For backward compatibility, a 'points_made' column is also provided and
+        is set equal to points_for_offense by _build_possessions.
         """
         pbp_df = self.df.copy()
-        poss_df = self._build_possessions(pbp_df, include_event_agg=False)
-
-        if "points_for_offense" in poss_df.columns:
-            poss_df["points_made"] = poss_df["points_for_offense"]
-
+        poss_df = self._build_possessions(pbp_df, include_event_agg=True)
         return poss_df
 
     def player_box_glossary(

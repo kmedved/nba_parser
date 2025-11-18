@@ -100,7 +100,7 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     # --- Turnover live/dead ---
     is_tov_family = fam == "turnover"
 
-    # Anything recorded as a steal is a live-ball TO.
+    # Anything recorded as a steal is a live-ball turnover.
     is_steal_flag = df.get("is_steal", 0).fillna(0).astype(int) == 1
 
     sub_lower = subfam.astype(str).str.lower()
@@ -124,11 +124,11 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         if not quals:
             return False
 
-        # If it's a string (e.g., from CSV), just substring search.
+        # If qualifiers come in as a string (e.g., from CSV), do a simple substring search.
         if isinstance(quals, str):
             return "andone" in quals.lower()
 
-        # Otherwise, assume it's iterable and normalize.
+        # Otherwise assume it's iterable and normalize each entry.
         try:
             quals_lower = [str(q).lower() for q in quals]
         except TypeError:
@@ -192,25 +192,28 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                     _increment_count(counts[key], f"{zone}_FGM")
 
             # Assist handling:
-            # - Prefer explicit assist_id if present.
+            # - Prefer explicit assist_id (CDN-era pbp).
             # - Fall back to player2_id on made shots for legacy pbp where
-            #   assists live in player2_id.
+            #   assists are stored as player2_id.
             assist_id = row.get("assist_id")
             if (assist_id is None or pd.isna(assist_id) or assist_id == 0) and "player2_id" in row.index:
                 assist_id = row.get("player2_id")
 
             assisted = not (pd.isna(assist_id) or assist_id == 0)
 
-            # Only count assists on made field goals
-            if assisted and row.get("is_fg_make"):
+            if assisted:
                 # Shooter-level assisted makes
-                _increment_count(counts[key], "FGM_AST", 1.0)
-                if row.get("is_three"):
+                _increment_count(
+                    counts[key],
+                    "FGM_AST",
+                    1.0 if row.get("is_fg_make") else 0.0,
+                )
+                if row.get("is_three") and row.get("is_fg_make"):
                     _increment_count(counts[key], "ThreePM_AST")
-                if zone:
+                if zone and row.get("is_fg_make"):
                     _increment_count(counts[key], f"{zone}_FGM_AST")
 
-                # Passer-level AST counts by zone and 3P
+                # Passer-level AST counts (by zone + 3P)
                 ast_key = (game_id, row.get("team_id"), assist_id)
                 _increment_count(counts[ast_key], "AST")
                 if zone:
@@ -752,5 +755,15 @@ def build_player_box(
         # 100p and pct are already in your current code as {label}_FGA_100p, etc.
         merged[f"{label}_FGM_100p_UNAST"] = merged.get(f"{label}_FGM_UNAST_100p", 0)
         merged[f"{label}_FGA_100p_UNAST"] = merged.get(f"{label}_FGA_UNAST_100p", 0)
+
+    # --- Defensive rebound alias for glossary naming ---
+    merged["DRB"] = merged.get("DREB", 0)
+
+    # --- Raw AST-by-zone aliases corresponding to AST_*ft_100p ---
+    merged["AST_0_3ft"] = merged.get("AST_0_3", 0)
+    merged["AST_4_9ft"] = merged.get("AST_4_9", 0)
+    merged["AST_10_17ft"] = merged.get("AST_10_17", 0)
+    merged["AST_18_23ft"] = merged.get("AST_18_23", 0)
+    merged["AST_3P"] = merged.get("AST_3P", 0)
 
     return merged
