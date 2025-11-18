@@ -65,86 +65,121 @@ class PbP:
         # the _build_possessions() output as the canonical representation of
         # possessions. These columns are kept for backwards compatibility.
 
-        # calculating made shot possessions
-        self.df["home_possession"] = np.where(
-            (self.df.event_team == self.df.home_team_abbrev)
-            & (self.df.event_type_de == "shot"),
-            1,
-            0,
-        )
-        # calculating turnover possessions
-        self.df["home_possession"] = np.where(
-            (self.df.event_team == self.df.home_team_abbrev)
-            & (self.df.event_type_de == "turnover"),
-            1,
-            self.df["home_possession"],
-        )
-        # calculating defensive rebound possessions
-        self.df["home_possession"] = np.where(
-            (
-                (self.df.event_team == self.df.away_team_abbrev)
-                & (self.df.is_d_rebound == 1)
-            )
-            | (
-                (self.df.event_type_de == "rebound")
-                & (self.df.is_d_rebound == 0)
-                & (self.df.is_o_rebound == 0)
-                & (self.df.event_team == self.df.away_team_abbrev)
-                & (self.df.event_type_de.shift(1) != "free-throw")
-            ),
-            1,
-            self.df["home_possession"],
-        )
-        # calculating final free throw possessions
-        self.df["home_possession"] = np.where(
-            (self.df.event_team == self.df.home_team_abbrev)
-            & (
-                (self.df.homedescription.str.contains("Free Throw 2 of 2"))
-                | (self.df.homedescription.str.contains("Free Throw 3 of 3"))
-            ),
-            1,
-            self.df["home_possession"],
-        )
-        # calculating made shot possessions
-        self.df["away_possession"] = np.where(
-            (self.df.event_team == self.df.away_team_abbrev)
-            & (self.df.event_type_de == "shot"),
-            1,
-            0,
-        )
-        # calculating turnover possessions
-        self.df["away_possession"] = np.where(
-            (self.df.event_team == self.df.away_team_abbrev)
-            & (self.df.event_type_de == "turnover"),
-            1,
-            self.df["away_possession"],
-        )
-        # calculating defensive rebound possessions
-        self.df["away_possession"] = np.where(
-            (
+        # Prefer canonical possession_after when available (CDN + modern schema),
+        # fall back to legacy text-based heuristics otherwise.
+        if "possession_after" in self.df.columns:
+            # Start with zeros.
+            self.df["home_possession"] = 0
+            self.df["away_possession"] = 0
+
+            home_id = self.home_team_id
+            away_id = self.away_team_id
+
+            pos_raw = self.df["possession_after"]
+
+            # Normalize: treat only home/away IDs as valid possession owners.
+            # Forward-fill to cover sequences of events where possession doesn't change.
+            pos_team = pos_raw.where(pos_raw.isin([home_id, away_id]))
+            pos_team = pos_team.ffill()
+
+            # For any leading NaNs (pre-jump-ball) that are still NaN after ffill,
+            # backfill them with the first valid possession owner so those events
+            # belong to the first possession.
+            pos_team = pos_team.bfill()
+
+            # At this point, pos_team is constant over stretches where the same
+            # team has the ball. The end of each stretch is a possession boundary.
+            is_last_in_stretch = (pos_team != pos_team.shift(-1)) | pos_team.isna()
+
+            # Mark the final event of each possession for home vs away.
+            home_pos_idx = is_last_in_stretch & (pos_team == home_id)
+            away_pos_idx = is_last_in_stretch & (pos_team == away_id)
+
+            self.df.loc[home_pos_idx, "home_possession"] = 1
+            self.df.loc[away_pos_idx, "away_possession"] = 1
+
+        else:
+            # --- LEGACY HEURISTIC POSSESSION FLAGS (existing code path) ---
+            # calculating made shot possessions
+            self.df["home_possession"] = np.where(
                 (self.df.event_team == self.df.home_team_abbrev)
-                & (self.df.is_d_rebound == 1)
+                & (self.df.event_type_de == "shot"),
+                1,
+                0,
             )
-            | (
-                (self.df.event_type_de == "rebound")
-                & (self.df.is_d_rebound == 0)
-                & (self.df.is_o_rebound == 0)
-                & (self.df.event_team == self.df.home_team_abbrev)
-                & (self.df.event_type_de.shift(1) != "free-throw")
-            ),
-            1,
-            self.df["away_possession"],
-        )
-        # calculating final free throw possessions
-        self.df["away_possession"] = np.where(
-            (self.df.event_team == self.df.away_team_abbrev)
-            & (
-                (self.df.visitordescription.str.contains("Free Throw 2 of 2"))
-                | (self.df.visitordescription.str.contains("Free Throw 3 of 3"))
-            ),
-            1,
-            self.df["away_possession"],
-        )
+            # calculating turnover possessions
+            self.df["home_possession"] = np.where(
+                (self.df.event_team == self.df.home_team_abbrev)
+                & (self.df.event_type_de == "turnover"),
+                1,
+                self.df["home_possession"],
+            )
+            # calculating defensive rebound possessions
+            self.df["home_possession"] = np.where(
+                (
+                    (self.df.event_team == self.df.away_team_abbrev)
+                    & (self.df.is_d_rebound == 1)
+                )
+                | (
+                    (self.df.event_type_de == "rebound")
+                    & (self.df.is_d_rebound == 0)
+                    & (self.df.is_o_rebound == 0)
+                    & (self.df.event_team == self.df.away_team_abbrev)
+                    & (self.df.event_type_de.shift(1) != "free-throw")
+                ),
+                1,
+                self.df["home_possession"],
+            )
+            # calculating final free throw possessions
+            self.df["home_possession"] = np.where(
+                (self.df.event_team == self.df.home_team_abbrev)
+                & (
+                    (self.df.homedescription.str.contains("Free Throw 2 of 2"))
+                    | (self.df.homedescription.str.contains("Free Throw 3 of 3"))
+                ),
+                1,
+                self.df["home_possession"],
+            )
+            # calculating made shot possessions
+            self.df["away_possession"] = np.where(
+                (self.df.event_team == self.df.away_team_abbrev)
+                & (self.df.event_type_de == "shot"),
+                1,
+                0,
+            )
+            # calculating turnover possessions
+            self.df["away_possession"] = np.where(
+                (self.df.event_team == self.df.away_team_abbrev)
+                & (self.df.event_type_de == "turnover"),
+                1,
+                self.df["away_possession"],
+            )
+            # calculating defensive rebound possessions
+            self.df["away_possession"] = np.where(
+                (
+                    (self.df.event_team == self.df.home_team_abbrev)
+                    & (self.df.is_d_rebound == 1)
+                )
+                | (
+                    (self.df.event_type_de == "rebound")
+                    & (self.df.is_d_rebound == 0)
+                    & (self.df.is_o_rebound == 0)
+                    & (self.df.event_team == self.df.home_team_abbrev)
+                    & (self.df.event_type_de.shift(1) != "free-throw")
+                ),
+                1,
+                self.df["away_possession"],
+            )
+            # calculating final free throw possessions
+            self.df["away_possession"] = np.where(
+                (self.df.event_team == self.df.away_team_abbrev)
+                & (
+                    (self.df.visitordescription.str.contains("Free Throw 2 of 2"))
+                    | (self.df.visitordescription.str.contains("Free Throw 3 of 3"))
+                ),
+                1,
+                self.df["away_possession"],
+            )
 
     def _point_calc_player(self):
         """
