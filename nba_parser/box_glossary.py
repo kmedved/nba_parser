@@ -105,9 +105,9 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- Canonical family based on event_type_de, not API family ---
     if "event_type_de" in df.columns:
-        fam_src = df["event_type_de"]
+        fam_src = df["event_type_de"].fillna("")
     elif "family" in df.columns:
-        fam_src = df["family"]
+        fam_src = df["family"].fillna("")
     else:
         # If we truly have no event type info, fall back to an empty string series
         fam_src = pd.Series([""] * len(df), index=df.index)
@@ -196,7 +196,8 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
         # If qualifiers come in as a string (e.g., from CSV), do a simple substring search.
         if isinstance(quals, str):
-            return "andone" in quals.lower()
+            q = quals.lower()
+            return ("andone" in q) or ("and1" in q) or ("and-one" in q)
 
         # Otherwise assume it's iterable and normalize each entry.
         try:
@@ -204,7 +205,7 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         except TypeError:
             return False
 
-        return "andone" in quals_lower
+        return any(s in q for q in quals_lower for s in ("andone", "and1", "and-one"))
 
     df["is_and_one"] = df.apply(_is_and_one_row, axis=1)
 
