@@ -41,8 +41,26 @@ def classify_shot_zone(shot_distance: float | None, area: str | None) -> Optiona
 
 def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
-    if "family" not in df.columns:
-        df["family"] = df.get("event_type_de")
+    # --- Subfamily normalization ---
+    if "subfamily_de" in df.columns:
+        subfam = df["subfamily_de"].fillna("")
+    elif "subfamily" in df.columns:
+        df["subfamily_de"] = df["subfamily"].fillna("")
+        subfam = df["subfamily_de"]
+    else:
+        subfam = pd.Series([""] * len(df), index=df.index)
+        df["subfamily_de"] = subfam
+
+    # --- Canonical family based on event_type_de, not API family ---
+    if "event_type_de" in df.columns:
+        fam_src = df["event_type_de"]
+    else:
+        fam_src = df.get("family", "")
+
+    fam = fam_src.astype(str).str.lower().str.replace("-", "_", regex=False)
+    df["family"] = fam
+
+    # --- Event team id ---
     if "team_id" not in df.columns:
         df["team_id"] = np.where(
             df.get("event_team") == df.get("home_team_abbrev"),
@@ -53,38 +71,46 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
                 np.nan,
             ),
         )
-    # Prefer event-level points_made_x if present (e.g., after a merge that
-    # produced points_made_x / points_made_y). Otherwise fall back to the
-    # aggregate points_made_y, or leave any existing points_made untouched.
+
+    # --- Ensure event-level points_made exists ---
     if "points_made" not in df.columns:
         if "points_made_x" in df.columns:
             df["points_made"] = df["points_made_x"]
         elif "points_made_y" in df.columns:
             df["points_made"] = df["points_made_y"]
-    fam = df["family"].astype(str).str.lower().str.replace("-", "_", regex=False)
-    df["family"] = fam
+        else:
+            df["points_made"] = 0
 
-    df["is_fg_attempt"] = fam.isin(["shot", "miss_shot", "missed_shot"])
-    df["is_fg_make"] = (fam == "shot") & (df["points_made"] > 0)
+    # --- FGA/FGM/FT flags ---
+    is_shot_like = fam.isin(["shot", "miss_shot", "missed_shot"])
+    df["is_fg_attempt"] = is_shot_like
+
+    if "shot_made" in df.columns:
+        df["shot_made"] = df["shot_made"].fillna(0).astype(int)
+        df["is_fg_make"] = df["is_fg_attempt"] & (df["shot_made"] == 1)
+    else:
+        df["is_fg_make"] = (fam == "shot") & (df["points_made"] > 0)
+
     df["is_ft"] = fam == "free_throw"
     df["is_ft_make"] = df["is_ft"] & (df["points_made"] > 0)
+
+    # Three-pointers
     df["is_three"] = df.get("is_three", 0).astype(bool)
 
+    # --- Turnover live/dead ---
     is_tov_family = fam == "turnover"
-    if "subfamily_de" in df.columns:
-        subfam = df["subfamily_de"].fillna("")
-    else:
-        # Ensure index alignment if df has a non-default index
-        subfam = pd.Series([""] * len(df), index=df.index)
     df["is_turnover_live"] = is_tov_family & subfam.str.contains("live", case=False)
     df["is_turnover_dead"] = is_tov_family & ~df["is_turnover_live"]
-    df.loc[is_tov_family & ~subfam.astype(bool), "is_turnover_live"] = (
-        is_tov_family & (df["is_steal"] == 1)
+
+    no_subfamily = ~subfam.astype(bool)
+    df.loc[is_tov_family & no_subfamily, "is_turnover_live"] = (
+        is_tov_family & (df.get("is_steal", 0) == 1)
     )
-    df.loc[is_tov_family & ~subfam.astype(bool), "is_turnover_dead"] = (
+    df.loc[is_tov_family & no_subfamily, "is_turnover_dead"] = (
         is_tov_family & ~df["is_turnover_live"]
     )
 
+    # --- Foul flavors ---
     is_foul_family = fam == "foul"
     sub = subfam.str.lower()
     df["is_loose_ball_foul"] = is_foul_family & sub.str.contains("loose")
@@ -92,24 +118,28 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df["is_technical"] = is_foul_family & sub.str.contains("technical")
     df["is_charge"] = is_foul_family & sub.str.contains("charging")
 
+    # --- And-ones via qualifiers ---
     def _is_and_one_row(row: pd.Series) -> bool:
         quals = row.get("qualifiers") or []
         if isinstance(quals, str):
             return False
         quals_lower = [q.lower() for q in quals]
-        if "andone" in quals_lower:
-            return True
-        return False
+        return "andone" in quals_lower
 
     df["is_and_one"] = df.apply(_is_and_one_row, axis=1)
 
-    shot_mask = fam.isin(["shot", "miss_shot", "missed_shot"])
+    # --- Shot zones ---
+    shot_mask = df["is_fg_attempt"]
     df["shot_zone"] = np.where(
         shot_mask,
-        df.apply(lambda r: classify_shot_zone(r.get("shot_distance"), r.get("area")), axis=1),
+        df.apply(
+            lambda r: classify_shot_zone(r.get("shot_distance"), r.get("area")),
+            axis=1,
+        ),
         None,
     )
 
+    # --- Off/def team ids for event-level context ---
     off_mask = df["is_fg_attempt"] | df["is_ft"] | (df["family"] == "turnover")
     df["off_team_id"] = np.where(off_mask, df["team_id"], np.nan)
     df["def_team_id"] = np.where(
@@ -117,6 +147,7 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         np.where(df["off_team_id"] == df["home_team_id"], df["away_team_id"], df["home_team_id"]),
         np.nan,
     )
+
     return df
 
 
@@ -236,9 +267,8 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
             if stealer and stealer != 0:
                 _increment_count(counts[steal_key], "STL")
 
-        goaltend_flag = False
-        if isinstance(row.get("subfamily_de"), str) and "goaltend" in row.get("subfamily_de").lower():
-            goaltend_flag = True
+        subfamily = row.get("subfamily_de") or row.get("subfamily")
+        goaltend_flag = isinstance(subfamily, str) and "goaltend" in subfamily.lower()
         if goaltend_flag:
             goaltend_player = row.get("player3_id") or row.get("player1_id")
             goaltend_team = row.get("player3_team_id") or row.get("player1_team_id")
@@ -327,6 +357,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                 _increment_count(exposures[key], "OnCourt_Team_FT_Att", poss.get("off_team_FTA", 0))
                 _increment_count(exposures[key], "OnCourt_Team_FT_Made", poss.get("off_team_FTM", 0))
                 _increment_count(exposures[key], "OnCourt_Team_FGM", poss.get("off_team_FGM", 0))
+                _increment_count(exposures[key], "OnCourt_Team_FGA", poss.get("off_team_FGA", 0))
 
         for pid in def_players:
             if pid and pid != 0:
@@ -355,6 +386,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
         vals.setdefault("OnCourt_Team_3p_Att", 0)
         vals.setdefault("OnCourt_Team_FT_Made", 0)
         vals.setdefault("OnCourt_Team_FT_Att", 0)
+        vals.setdefault("OnCourt_Team_FGA", 0)
         vals.setdefault("OnCourt_Opp_Points", 0)
         vals.setdefault("OnCourt_Opp_3p_Made", 0)
         vals.setdefault("OnCourt_Opp_3p_Att", 0)
@@ -606,5 +638,98 @@ def build_player_box(
     merged["BLK_Team"] = merged.get("BLK_Team", 0)
 
     merged["POSS"] = merged.get("POSS_OFF", 0) + merged.get("POSS_DEF", 0)
+
+    # --- Game / side context ---
+    home_team_id = df["home_team_id"].iloc[0]
+    away_team_id = df["away_team_id"].iloc[0]
+    merged["h_tm_id"] = home_team_id
+    merged["v_tm_id"] = away_team_id
+    merged["home_fl"] = np.where(merged["team_id"] == home_team_id, 1, 0)
+    if "season" in df.columns:
+        merged["season"] = df["season"].iloc[0]
+        merged["Year"] = merged["season"]
+    merged["check_season"] = 0
+
+    # --- Metadata placeholders if player_meta didn't provide them ---
+    for col in ["PlayerSeasonID", "PlayerID", "FullName", "Position", "PositionNum", "Height", "Weight", "Age"]:
+        if col not in merged.columns:
+            merged[col] = np.nan
+
+    merged["Player_Team"] = merged.get("FullName")
+
+    # --- FT and 3P aliases ---
+    merged["FT%"] = merged["FT_pct"]
+    merged["3PPct"] = merged["ThreeP_pct"]
+    merged["3PM_100p"] = np.where(
+        merged["POSS_OFF"] > 0, merged["ThreePM"] / merged["POSS_OFF"] * 100.0, 0.0
+    )
+    merged["3PA_100p"] = np.where(
+        merged["POSS_OFF"] > 0, merged["ThreePA"] / merged["POSS_OFF"] * 100.0, 0.0
+    )
+
+    # --- And-1 rates ---
+    merged["AndOnes"] = merged.get("AndOnes", 0)
+    merged["AndOne_100p"] = np.where(
+        merged["POSS_OFF"] > 0, merged["AndOnes"] / merged["POSS_OFF"] * 100.0, 0.0
+    )
+
+    # --- OREB-based rates relative to team FGA / FT ---
+    merged["OREB_FGA"] = np.where(
+        merged.get("OnCourt_Team_FGA", 0) > 0,
+        merged["OREB"] / merged["OnCourt_Team_FGA"] * 100.0,
+        0.0,
+    )
+    merged["OREB_FT"] = np.where(
+        merged.get("OnCourt_Team_FT_Att", 0) > 0,
+        merged["OREB"] / merged["OnCourt_Team_FT_Att"] * 100.0,
+        0.0,
+    )
+
+    # --- Global unassisted shooting aliases ---
+    merged["FGM_UNAST"] = merged.get("FGM_UNAST", 0)
+    merged["FGA_UNAST"] = merged.get("FGA_UNAST", 0)
+    merged["FGM_UNAST_100p"] = np.where(
+        merged["POSS_OFF"] > 0, merged["FGM_UNAST"] / merged["POSS_OFF"] * 100.0, 0.0
+    )
+    merged["FGA_UNAST_100p"] = np.where(
+        merged["POSS_OFF"] > 0, merged["FGA_UNAST"] / merged["POSS_OFF"] * 100.0, 0.0
+    )
+    merged["FG_UNAST_Pct"] = np.where(
+        merged["FGA_UNAST"] > 0, merged["FGM_UNAST"] / merged["FGA_UNAST"], 0.0
+    )
+
+    # --- 3P unassisted/assisted aliasing ---
+    merged["3PM_UNAST"] = merged.get("ThreePM_UNAST", 0)
+    merged["3PA_UNAST"] = merged.get("ThreePA_UNAST", 0)
+    merged["3PM_UNAST_100p"] = np.where(
+        merged["POSS_OFF"] > 0, merged["3PM_UNAST"] / merged["POSS_OFF"] * 100.0, 0.0
+    )
+    merged["3PA_UNAST_100p"] = np.where(
+        merged["POSS_OFF"] > 0, merged["3PA_UNAST"] / merged["POSS_OFF"] * 100.0, 0.0
+    )
+    merged["3P_UNAST_Pct"] = np.where(
+        merged["3PA_UNAST"] > 0, merged["3PM_UNAST"] / merged["3PA_UNAST"], 0.0
+    )
+
+    merged["3PM_AST"] = merged.get("ThreePM_AST", 0)
+    merged["3PM_100p_AST"] = np.where(
+        merged["POSS_OFF"] > 0, merged["3PM_AST"] / merged["POSS_OFF"] * 100.0, 0.0
+    )
+
+    # --- Zone-level aliases for 0-3, 4-9, 10-17, 18-23 ---
+    for zone, label in [("0_3", "0_3ft"), ("4_9", "4_9ft"), ("10_17", "10_17ft"), ("18_23", "18_23ft")]:
+        base_fga = merged.get(f"{zone}_FGA", 0)
+        base_fgm = merged.get(f"{zone}_FGM", 0)
+        una_fga = merged.get(f"{zone}_FGA_UNAST", 0)
+        una_fgm = merged.get(f"{zone}_FGM_UNAST", 0)
+
+        merged[f"{label}_FGA"] = base_fga
+        merged[f"{label}_FGM"] = base_fgm
+        merged[f"{label}_FGA_UNAST"] = una_fga
+        merged[f"{label}_FGM_UNAST"] = una_fgm
+
+        # 100p and pct are already in your current code as {label}_FGA_100p, etc.
+        merged[f"{label}_FGM_100p_UNAST"] = merged.get(f"{label}_FGM_UNAST_100p", 0)
+        merged[f"{label}_FGA_100p_UNAST"] = merged.get(f"{label}_FGA_UNAST_100p", 0)
 
     return merged
