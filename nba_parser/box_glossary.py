@@ -268,8 +268,8 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     if "ft_n" in df.columns and "ft_m" in df.columns:
         try:
-            ft_n = df["ft_n"].fillna(0).astype(int)
-            ft_m = df["ft_m"].fillna(0).astype(int)
+            ft_n = pd.to_numeric(df["ft_n"], errors="raise").fillna(0).astype("int64")
+            ft_m = pd.to_numeric(df["ft_m"], errors="raise").fillna(0).astype("int64")
             df["is_last_ft"] = (ft_n == ft_m) & (ft_n > 0)
         except (ValueError, TypeError):
             # If conversion fails (e.g., bad data), use the heuristic fallback
@@ -285,14 +285,14 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     # Three-pointers
     if "is_three" in df.columns:
-        df["is_three"] = df["is_three"].fillna(0).astype(bool)
+        df["is_three"] = df["is_three"].fillna(False).astype(bool)
     else:
         # Fallback heuristic: treat long-distance FG attempts as 3s if distance is known.
         dist = df.get("shot_distance")
         if dist is not None:
             dist_num = pd.to_numeric(dist, errors="coerce")
-            # Use 23.75 feet as the threshold for above-the-break threes.
-            df["is_three"] = (dist_num >= 23.75) & df["is_fg_attempt"]
+            # Conservative threshold; only used when is_three is missing.
+            df["is_three"] = (dist_num >= 23.0) & df["is_fg_attempt"]
         else:
             df["is_three"] = False
 
@@ -747,7 +747,10 @@ def build_player_box(
     player_game_meta: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     merged = counts_df.merge(exposures_df, on=["game_id", "team_id", "player_id"], how="outer")
-    merged.fillna(0, inplace=True)
+
+    # Only fill NaNs in numeric columns; leave object/string metadata alone.
+    num_cols = merged.select_dtypes(include=["number"]).columns
+    merged[num_cols] = merged[num_cols].fillna(0)
     merged = merged[(merged["team_id"] != 0) & (merged["player_id"] != 0)]
 
     for col in ["game_id", "team_id", "player_id"]:
@@ -851,32 +854,45 @@ def build_player_box(
         if col not in merged.columns:
             merged[col] = 0
 
-    merged["TSAttempts"] = merged["FGA"] + 0.44 * merged["FTA"]
-    merged["TSpct"] = np.where(
-        merged["TSAttempts"] > 0,
-        merged["PTS"] / (2.0 * merged["TSAttempts"]),
+    # Build simple derived columns in a batch to reduce fragmentation
+    new_cols = {}
+
+    new_cols["TSAttempts"] = merged["FGA"] + 0.44 * merged["FTA"]
+    new_cols["TSpct"] = np.where(
+        new_cols["TSAttempts"] > 0,
+        merged["PTS"] / (2.0 * new_cols["TSAttempts"]),
         0.0,
     )
-    merged["TSPoss"] = merged["TSAttempts"]
-    merged["TS"] = merged["TSpct"]
-    merged["PossessionsUsed"] = merged["FGA"] + 0.44 * merged["FTA"] + merged.get("TOV", 0)
-    merged["USG"] = np.where(merged["POSS_OFF"] > 0, merged["PossessionsUsed"] / merged["POSS_OFF"], 0)
+    new_cols["TSPoss"] = new_cols["TSAttempts"]
+    new_cols["TS"] = new_cols["TSpct"]
+    new_cols["PossessionsUsed"] = merged["FGA"] + 0.44 * merged["FTA"] + merged.get("TOV", 0)
+    new_cols["USG"] = np.where(
+        merged["POSS_OFF"] > 0,
+        new_cols["PossessionsUsed"] / merged["POSS_OFF"],
+        0.0,
+    )
 
-    merged["FGPct"] = np.where(merged["FGA"] > 0, merged["FGM"] / merged["FGA"], 0)
-    merged["FT_pct"] = np.where(merged["FTA"] > 0, merged["FTM"] / merged["FTA"], 0)
-    merged["ThreeP_pct"] = np.where(merged["ThreePA"] > 0, merged["ThreePM"] / merged["ThreePA"], 0)
-    merged["FTR_Att"] = np.where(merged["FGA"] > 0, merged["FTA"] / merged["FGA"], 0)
-    merged["FTR_Made"] = np.where(merged["FGA"] > 0, merged["FTM"] / merged["FGA"], 0)
+    new_cols["FGPct"] = np.where(merged["FGA"] > 0, merged["FGM"] / merged["FGA"], 0.0)
+    new_cols["FT_pct"] = np.where(merged["FTA"] > 0, merged["FTM"] / merged["FTA"], 0.0)
+    new_cols["ThreeP_pct"] = np.where(merged["ThreePA"] > 0, merged["ThreePM"] / merged["ThreePA"], 0.0)
+    new_cols["FTR_Att"] = np.where(merged["FGA"] > 0, merged["FTA"] / merged["FGA"], 0.0)
+    new_cols["FTR_Made"] = np.where(merged["FGA"] > 0, merged["FTM"] / merged["FGA"], 0.0)
 
-    merged["ORBpct"] = np.where(
+    new_cols["ORBpct"] = np.where(
         merged["OnCourt_For_OREB_Total"] > 0,
         merged.get("OREB", 0) / merged["OnCourt_For_OREB_Total"],
-        0,
+        0.0,
     )
-    merged["DRBpct"] = np.where(
+    new_cols["DRBpct"] = np.where(
         merged["OnCourt_For_DREB_Total"] > 0,
         merged.get("DREB", 0) / merged["OnCourt_For_DREB_Total"],
-        0,
+        0.0,
+    )
+
+    # Attach them all at once
+    merged = pd.concat(
+        [merged, pd.DataFrame(new_cols, index=merged.index)],
+        axis=1,
     )
 
     # Alias rebound opportunity totals to glossary column names
@@ -942,6 +958,8 @@ def build_player_box(
     merged["FLAGRANT_100p"] = np.where(merged["POSS"] > 0, merged.get("FLAGRANT", 0) / merged["POSS"] * 100.0, 0)
     merged["Goaltends_100p"] = np.where(merged["POSS"] > 0, merged.get("Goaltends", 0) / merged["POSS"] * 100.0, 0)
 
+    zone_cols = {}
+
     for zone, label in [("0_3", "0_3ft"), ("4_9", "4_9ft"), ("10_17", "10_17ft"), ("18_23", "18_23ft")]:
         fga_col = f"{zone}_FGA"
         fgm_col = f"{zone}_FGM"
@@ -949,18 +967,43 @@ def build_player_box(
             merged[fga_col] = 0
         if fgm_col not in merged.columns:
             merged[fgm_col] = 0
-        merged[f"{label}_FGA_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get(fga_col, 0) / merged["POSS_OFF"] * 100.0, 0)
-        merged[f"{label}_FGM_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get(fgm_col, 0) / merged["POSS_OFF"] * 100.0, 0)
-        merged[f"{label}_FGPct"] = np.where(merged.get(fga_col, 0) > 0, merged.get(fgm_col, 0) / merged.get(fga_col, 0), 0)
-        una_fga = f"{zone}_FGA_UNAST"
-        una_fgm = f"{zone}_FGM_UNAST"
-        if una_fga not in merged.columns:
-            merged[una_fga] = 0
-        if una_fgm not in merged.columns:
-            merged[una_fgm] = 0
-        merged[f"{label}_FGA_UNAST_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get(una_fga, 0) / merged["POSS_OFF"] * 100.0, 0)
-        merged[f"{label}_FGM_UNAST_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get(una_fgm, 0) / merged["POSS_OFF"] * 100.0, 0)
-        merged[f"{label}_FG_UNAST_Pct"] = np.where(merged.get(una_fga, 0) > 0, merged.get(una_fgm, 0) / merged.get(una_fga, 0), 0)
+
+        # Build all derived names
+        fga = merged[fga_col]
+        fgm = merged[fgm_col]
+
+        zone_cols[f"{label}_FGA_100p"] = np.where(merged["POSS_OFF"] > 0, fga / merged["POSS_OFF"] * 100.0, 0.0)
+        zone_cols[f"{label}_FGM_100p"] = np.where(merged["POSS_OFF"] > 0, fgm / merged["POSS_OFF"] * 100.0, 0.0)
+        zone_cols[f"{label}_FGPct"] = np.where(fga > 0, fgm / fga, 0.0)
+
+        una_fga = merged.get(f"{zone}_FGA_UNAST")
+        una_fgm = merged.get(f"{zone}_FGM_UNAST")
+
+        if una_fga is None:
+            una_fga = pd.Series(0, index=merged.index)
+        if una_fgm is None:
+            una_fgm = pd.Series(0, index=merged.index)
+
+        merged[f"{zone}_FGA_UNAST"] = una_fga
+        merged[f"{zone}_FGM_UNAST"] = una_fgm
+
+        zone_cols[f"{label}_FGA_UNAST_100p"] = np.where(
+            merged["POSS_OFF"] > 0,
+            una_fga / merged["POSS_OFF"] * 100.0,
+            0.0,
+        )
+        zone_cols[f"{label}_FGM_UNAST_100p"] = np.where(
+            merged["POSS_OFF"] > 0,
+            una_fgm / merged["POSS_OFF"] * 100.0,
+            0.0,
+        )
+        zone_cols[f"{label}_FG_UNAST_Pct"] = np.where(una_fga > 0, una_fgm / una_fga, 0.0)
+
+    # Attach zone-derived columns in one shot
+    merged = pd.concat(
+        [merged, pd.DataFrame(zone_cols, index=merged.index)],
+        axis=1,
+    )
 
     merged["ThreePM_UNAST_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get("ThreePM_UNAST", 0) / merged["POSS_OFF"] * 100.0, 0)
     merged["ThreePA_UNAST_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get("ThreePA_UNAST", 0) / merged["POSS_OFF"] * 100.0, 0)
@@ -970,23 +1013,33 @@ def build_player_box(
     merged["ThreePM_100p_AST"] = np.where(merged["POSS_OFF"] > 0, merged.get("ThreePM_AST", 0) / merged["POSS_OFF"] * 100.0, 0)
 
     # --- Shooter-side zonal assisted FGM aliases ---
+    ast_zone_cols = {}
     for zone, label in [("0_3", "0_3ft"), ("4_9", "4_9ft"), ("10_17", "10_17ft"), ("18_23", "18_23ft")]:
         fgm_ast_col = f"{zone}_FGM_AST"
         if fgm_ast_col not in merged.columns:
             merged[fgm_ast_col] = 0
 
         # Raw count: e.g. 0_3ft_FGM_AST
-        merged[f"{label}_FGM_AST"] = merged.get(fgm_ast_col, 0)
+        ast_zone_cols[f"{label}_FGM_AST"] = merged.get(fgm_ast_col, 0)
 
         # Per-100 offensive possessions: e.g. 0_3ft_FGM_100p_AST
-        merged[f"{label}_FGM_100p_AST"] = np.where(
+        ast_zone_cols[f"{label}_FGM_100p_AST"] = np.where(
             merged["POSS_OFF"] > 0,
             merged.get(fgm_ast_col, 0) / merged["POSS_OFF"] * 100.0,
             0.0,
         )
 
     for zone, label in [("0_3", "AST_0_3ft"), ("4_9", "AST_4_9ft"), ("10_17", "AST_10_17ft"), ("18_23", "AST_18_23ft")]:
-        merged[f"{label}_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get(f"AST_{zone}", 0) / merged["POSS_OFF"] * 100.0, 0)
+        ast_zone_cols[f"{label}_100p"] = np.where(
+            merged["POSS_OFF"] > 0,
+            merged.get(f"AST_{zone}", 0) / merged["POSS_OFF"] * 100.0,
+            0.0,
+        )
+
+    merged = pd.concat(
+        [merged, pd.DataFrame(ast_zone_cols, index=merged.index)],
+        axis=1,
+    )
     merged["AST_3P_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get("AST_3P", 0) / merged["POSS_OFF"] * 100.0, 0)
 
     merged["BLK_Opp"] = merged.get("BLK_Opp", 0)
@@ -1108,6 +1161,8 @@ def build_player_box(
         merged["OnCourt_For_OREB_FGA"] = merged.get("OnCourt_For_OREB_Total", 0)
     if "OnCourt_For_DREB_FGA" not in merged.columns:
         merged["OnCourt_For_DREB_FGA"] = merged.get("OnCourt_For_DREB_Total", 0)
+
+    merged = merged.copy()
 
     return merged
 
