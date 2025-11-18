@@ -10,6 +10,30 @@ from .box_glossary import (
     append_team_totals,
 )
 
+
+def normalize_game_id(game_id):
+    """
+    Accept int or string game IDs of length 8 or 10 and return a canonical int.
+    Examples:
+        "0022200001" -> 22200001
+        "22200001"   -> 22200001
+        22200001     -> 22200001
+    """
+    if game_id is None:
+        return None
+    return int(str(game_id))
+
+
+def format_game_id(game_id):
+    """
+    Format a normalized game_id as a 10-digit string with leading zeros.
+    Example:
+        22200001 -> "0022200001"
+    """
+    if game_id is None:
+        return None
+    return f"{int(game_id):010d}"
+
 # NOTE:
 # The legacy *_calc_player and playerbygamestats() methods implement the original
 # per-player stat calculations based on the v2 pbp format. New code should prefer
@@ -35,6 +59,10 @@ class PbP:
             raise ValueError(
                 f"PbP expects a single-game DataFrame, but found game_ids={game_ids}"
             )
+        # Normalize 8- or 10-character IDs; store as int internally
+        normalized_game_id = normalize_game_id(game_ids[0])
+        self.game_id = normalized_game_id
+        self.df["game_id"] = normalized_game_id
         self.home_team = pbp_df["home_team_abbrev"].unique()[0]
         self.away_team = pbp_df["away_team_abbrev"].unique()[0]
         self.home_team_id = pbp_df["home_team_id"].unique()[0]
