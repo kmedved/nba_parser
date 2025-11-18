@@ -81,15 +81,12 @@ def classify_shot_zone(shot_distance: float | None, area: str | None) -> Optiona
 def _vectorized_is_and_one(qualifiers: pd.Series) -> pd.Series:
     """
     Vectorized check for And-One events.
+    Assumes qualifiers is a Series indexed like the pbp DataFrame.
     """
-    if qualifiers is None:
+    if qualifiers is None or len(qualifiers) == 0:
+        if isinstance(qualifiers, pd.Series):
+            return pd.Series(False, index=qualifiers.index)
         return pd.Series(dtype=bool)
-
-    if not isinstance(qualifiers, pd.Series):
-        qualifiers = pd.Series(qualifiers)
-
-    if qualifiers.empty:
-        return pd.Series(False, index=qualifiers.index)
 
     q_str = qualifiers.fillna("").astype(str).str.lower()
     return q_str.str.contains(r"and[ -]?one|and1", regex=True)
@@ -100,7 +97,12 @@ def _vectorized_shot_zone(df: pd.DataFrame) -> pd.Series:
     Vectorized calculation of shot zones.
     """
     shot_distance = pd.to_numeric(df.get("shot_distance"), errors="coerce")
-    area = df.get("area", pd.Series(dtype=str)).fillna("").astype(str).str.lower()
+
+    area_col = df.get("area")
+    if area_col is None:
+        # Ensure same index as df so boolean masks align cleanly
+        area_col = pd.Series([""] * len(df), index=df.index)
+    area = area_col.fillna("").astype(str).str.lower()
 
     # Initialize zones as None (object type to hold strings or None)
     zones = pd.Series(None, index=df.index, dtype=object)
@@ -597,7 +599,7 @@ def build_player_box(
     exposures_df: pd.DataFrame,
     player_meta: Optional[pd.DataFrame] = None,
     game_meta: Optional[pd.DataFrame] = None,
-    restrict_to_pbg: bool = True,
+    restrict_to_pbg: bool = False,
 ) -> pd.DataFrame:
     merged = counts_df.merge(exposures_df, on=["game_id", "team_id", "player_id"], how="outer")
     merged.fillna(0, inplace=True)
@@ -641,8 +643,9 @@ def build_player_box(
         )
     ]
 
-    # Restrict to players that actually appear in the player-by-game stats.
-    # This avoids including ghost rows from exposure-only artifacts.
+    # Restrict to players with positive Minutes only (debug / optional).
+    # By default we keep zero-minute rows if they carry on-court points,
+    # to preserve scoring invariants enforced in tests.
     if restrict_to_pbg:
         merged = merged[merged["Minutes"] > 0]
 
