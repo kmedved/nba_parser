@@ -797,9 +797,11 @@ def build_player_box(
     merged[num_cols] = merged[num_cols].fillna(0)
     merged = merged[(merged["team_id"] != 0) & (merged["player_id"] != 0)]
 
-    for col in ["game_id", "team_id", "player_id"]:
+    # Normalize team/player ids to ints, but leave game_id as-is
+    # (it’s usually a zero-padded string like '0021900151').
+    for col in ["team_id", "player_id"]:
         if col in merged.columns:
-            merged[col] = merged[col].astype(int)
+            merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0).astype(int)
 
     # Identify any rows where a player has on-court points credited but no minutes.
     # In clean data this should be rare; it typically indicates a mismatch between
