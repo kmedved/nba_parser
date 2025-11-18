@@ -8,6 +8,7 @@ from .box_glossary import (
     compute_on_court_exposures,
     build_player_box,
     append_team_totals,
+    _coerce_id_scalar,
 )
 
 
@@ -53,6 +54,30 @@ class PbP:
     def __init__(self, pbp_df):
         self.df = pbp_df
 
+        id_columns = [
+            "game_id",
+            "team_id",
+            "home_team_id",
+            "away_team_id",
+            "player1_team_id",
+            "player2_team_id",
+            "player3_team_id",
+            "player1_id",
+            "player2_id",
+            "player3_id",
+            "assist_id",
+            *(f"home_player_{i}_id" for i in range(1, 6)),
+            *(f"away_player_{i}_id" for i in range(1, 6)),
+        ]
+
+        for col in id_columns:
+            if col in self.df.columns:
+                self.df[col] = (
+                    pd.to_numeric(self.df[col], errors="coerce")
+                    .fillna(0)
+                    .astype(int)
+                )
+
         # Enforce single-game input; many invariants assume one game_id.
         game_ids = self.df["game_id"].unique()
         if len(game_ids) != 1:
@@ -63,11 +88,11 @@ class PbP:
         normalized_game_id = normalize_game_id(game_ids[0])
         self.game_id = normalized_game_id
         self.df["game_id"] = normalized_game_id
-        self.home_team = pbp_df["home_team_abbrev"].unique()[0]
-        self.away_team = pbp_df["away_team_abbrev"].unique()[0]
-        self.home_team_id = pbp_df["home_team_id"].unique()[0]
-        self.away_team_id = pbp_df["away_team_id"].unique()[0]
-        self.season = pbp_df["season"].unique()[0]
+        self.home_team = self.df["home_team_abbrev"].unique()[0]
+        self.away_team = self.df["away_team_abbrev"].unique()[0]
+        self.home_team_id = int(self.df["home_team_id"].unique()[0])
+        self.away_team_id = int(self.df["away_team_id"].unique()[0])
+        self.season = self.df["season"].unique()[0]
 
         # Handle PbP classes created from imported CSV files versus those
         # created by nba_scraper that handles game_date as a proper datetime.
@@ -1576,22 +1601,42 @@ class PbP:
         away_ids = [first_row.get(f"away_player_{i}_id") for i in range(1, 6)]
 
         starters = []
-        game_id = first_row.get("game_id")
-        home_team_id = first_row.get("home_team_id")
-        away_team_id = first_row.get("away_team_id")
+        game_id = _coerce_id_scalar(first_row.get("game_id"))
+        home_team_id = _coerce_id_scalar(first_row.get("home_team_id"))
+        away_team_id = _coerce_id_scalar(first_row.get("away_team_id"))
 
         for pid in home_ids:
             if pid and pid != 0 and not pd.isna(pid):
                 starters.append(
-                    {"game_id": game_id, "team_id": home_team_id, "player_id": int(pid), "Starts": 1}
+                    {
+                        "game_id": game_id,
+                        "team_id": home_team_id,
+                        "player_id": _coerce_id_scalar(pid),
+                        "Starts": 1,
+                    }
                 )
         for pid in away_ids:
             if pid and pid != 0 and not pd.isna(pid):
                 starters.append(
-                    {"game_id": game_id, "team_id": away_team_id, "player_id": int(pid), "Starts": 1}
+                    {
+                        "game_id": game_id,
+                        "team_id": away_team_id,
+                        "player_id": _coerce_id_scalar(pid),
+                        "Starts": 1,
+                    }
                 )
 
-        return pd.DataFrame(starters)
+        starters_df = pd.DataFrame(starters)
+        if not starters_df.empty:
+            for col in ["game_id", "team_id", "player_id"]:
+                if col in starters_df.columns:
+                    starters_df[col] = (
+                        pd.to_numeric(starters_df[col], errors="coerce")
+                        .fillna(0)
+                        .astype(int)
+                    )
+
+        return starters_df
 
     def player_box_glossary(
         self,

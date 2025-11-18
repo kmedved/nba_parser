@@ -9,6 +9,16 @@ from nba_parser.box_glossary import annotate_events
 def pbp_v2_game():
     """Provides a parsed PbP object for a V2 game."""
     pbp_df = pd.read_csv("test/20700233.csv")
+    for col in [
+        "game_id",
+        "team_id",
+        "home_team_id",
+        "away_team_id",
+        *(f"home_player_{i}_id" for i in range(1, 6)),
+        *(f"away_player_{i}_id" for i in range(1, 6)),
+    ]:
+        if col in pbp_df.columns:
+            pbp_df[col] = pd.to_numeric(pbp_df[col], errors="coerce").fillna(0).astype(int)
     pbp_df["season"] = 2008
     return PbP(pbp_df)
 
@@ -42,7 +52,7 @@ def test_robust_team_id_normalization():
 
     annotated = annotate_events(df)
 
-    assert annotated["team_id"].tolist() == [1.0, 2.0, 1.0]
+    assert annotated["team_id"].tolist() == [1, 2, 1]
 
 
 def test_compute_starters(pbp_v2_game):

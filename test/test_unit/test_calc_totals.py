@@ -22,6 +22,17 @@ def setup():
         "21900151.csv",
     ]
     pbp_dfs = [pd.read_csv(f"test/{f}") for f in files]
+    for pbp_df in pbp_dfs:
+        for col in [
+            "game_id",
+            "team_id",
+            "home_team_id",
+            "away_team_id",
+            *(f"home_player_{i}_id" for i in range(1, 6)),
+            *(f"away_player_{i}_id" for i in range(1, 6)),
+        ]:
+            if col in pbp_df.columns:
+                pbp_df[col] = pd.to_numeric(pbp_df[col], errors="coerce").fillna(0).astype(int)
     pbp_dfs = [npar.PbP(pbp_df) for pbp_df in pbp_dfs]
     pbg_dfs = [pbp_df.playerbygamestats() for pbp_df in pbp_dfs]
     tbg_dfs = [pbp_df.teambygamestats() for pbp_df in pbp_dfs]

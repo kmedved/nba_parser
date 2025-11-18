@@ -9,9 +9,29 @@ def setup():
     function for test setup and teardown
     """
     pbp_df = pd.read_csv("test/20700233.csv")
+    for col in [
+        "game_id",
+        "team_id",
+        "home_team_id",
+        "away_team_id",
+        *(f"home_player_{i}_id" for i in range(1, 6)),
+        *(f"away_player_{i}_id" for i in range(1, 6)),
+    ]:
+        if col in pbp_df.columns:
+            pbp_df[col] = pd.to_numeric(pbp_df[col], errors="coerce").fillna(0).astype(int)
     pbp_df["season"] = 2008
     pbp = PbP(pbp_df)
     pbp_df = pd.read_csv("test/21100736.csv")
+    for col in [
+        "game_id",
+        "team_id",
+        "home_team_id",
+        "away_team_id",
+        *(f"home_player_{i}_id" for i in range(1, 6)),
+        *(f"away_player_{i}_id" for i in range(1, 6)),
+    ]:
+        if col in pbp_df.columns:
+            pbp_df[col] = pd.to_numeric(pbp_df[col], errors="coerce").fillna(0).astype(int)
     pbp1 = PbP(pbp_df)
     # TODO add multiple files here to make the tests more random and more
     # robust Matt Barlowe 2020-03-24
