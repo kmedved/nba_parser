@@ -690,6 +690,23 @@ def build_player_box(
 
     merged["FGM_100p_AST"] = np.where(merged["POSS_OFF"] > 0, merged.get("FGM_AST", 0) / merged["POSS_OFF"] * 100.0, 0)
     merged["ThreePM_100p_AST"] = np.where(merged["POSS_OFF"] > 0, merged.get("ThreePM_AST", 0) / merged["POSS_OFF"] * 100.0, 0)
+
+    # --- Shooter-side zonal assisted FGM aliases ---
+    for zone, label in [("0_3", "0_3ft"), ("4_9", "4_9ft"), ("10_17", "10_17ft"), ("18_23", "18_23ft")]:
+        fgm_ast_col = f"{zone}_FGM_AST"
+        if fgm_ast_col not in merged.columns:
+            merged[fgm_ast_col] = 0
+
+        # Raw count: e.g. 0_3ft_FGM_AST
+        merged[f"{label}_FGM_AST"] = merged.get(fgm_ast_col, 0)
+
+        # Per-100 offensive possessions: e.g. 0_3ft_FGM_100p_AST
+        merged[f"{label}_FGM_100p_AST"] = np.where(
+            merged["POSS_OFF"] > 0,
+            merged.get(fgm_ast_col, 0) / merged["POSS_OFF"] * 100.0,
+            0.0,
+        )
+
     for zone, label in [("0_3", "AST_0_3ft"), ("4_9", "AST_4_9ft"), ("10_17", "AST_10_17ft"), ("18_23", "AST_18_23ft")]:
         merged[f"{label}_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get(f"AST_{zone}", 0) / merged["POSS_OFF"] * 100.0, 0)
     merged["AST_3P_100p"] = np.where(merged["POSS_OFF"] > 0, merged.get("AST_3P", 0) / merged["POSS_OFF"] * 100.0, 0)
