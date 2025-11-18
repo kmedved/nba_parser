@@ -831,8 +831,10 @@ def build_player_box(
     merged[num_cols] = merged[num_cols].fillna(0)
     merged = merged[(merged["team_id"] != 0) & (merged["player_id"] != 0)]
 
-    # Normalize team/player ids to ints, but leave game_id as-is
-    # (it’s usually a zero-padded string like '0021900151').
+    # Normalize identifiers: keep game_id as a zero-padded string and enforce
+    # integer team/player ids for consistent downstream keys.
+    if "game_id" in merged.columns:
+        merged["game_id"] = merged["game_id"].astype(str)
     for col in ["team_id", "player_id"]:
         if col in merged.columns:
             merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0).astype(int)
@@ -914,11 +916,20 @@ def build_player_box(
         )
 
     if game_meta is not None and not game_meta.empty:
-        merged = merged.merge(game_meta, on="game_id", how="left")
+        gm = game_meta.copy()
+        if "game_id" in gm.columns:
+            gm["game_id"] = gm["game_id"].astype(str)
+        merged = merged.merge(gm, on="game_id", how="left")
 
     if player_game_meta is not None and not player_game_meta.empty:
+        pgm = player_game_meta.copy()
+        if "game_id" in pgm.columns:
+            pgm["game_id"] = pgm["game_id"].astype(str)
+        for col in ["team_id", "player_id"]:
+            if col in pgm.columns:
+                pgm[col] = pd.to_numeric(pgm[col], errors="coerce").fillna(0).astype(int)
         merged = merged.merge(
-            player_game_meta,
+            pgm,
             on=["game_id", "team_id", "player_id"],
             how="outer",
         )
