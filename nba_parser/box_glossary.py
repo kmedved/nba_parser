@@ -99,16 +99,16 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- Turnover live/dead ---
     is_tov_family = fam == "turnover"
-    df["is_turnover_live"] = is_tov_family & subfam.str.contains("live", case=False)
-    df["is_turnover_dead"] = is_tov_family & ~df["is_turnover_live"]
 
-    no_subfamily = ~subfam.astype(bool)
-    df.loc[is_tov_family & no_subfamily, "is_turnover_live"] = (
-        is_tov_family & (df.get("is_steal", 0) == 1)
-    )
-    df.loc[is_tov_family & no_subfamily, "is_turnover_dead"] = (
-        is_tov_family & ~df["is_turnover_live"]
-    )
+    # Anything recorded as a steal is a live-ball TO.
+    is_steal_flag = df.get("is_steal", 0).fillna(0).astype(int) == 1
+
+    sub_lower = subfam.astype(str).str.lower()
+    # Some feeds may explicitly label "live-ball" in text.
+    sub_live_flag = sub_lower.str.contains("live")
+
+    df["is_turnover_live"] = is_tov_family & (is_steal_flag | sub_live_flag)
+    df["is_turnover_dead"] = is_tov_family & ~df["is_turnover_live"]
 
     # --- Foul flavors ---
     is_foul_family = fam == "foul"
@@ -120,10 +120,20 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- And-ones via qualifiers ---
     def _is_and_one_row(row: pd.Series) -> bool:
-        quals = row.get("qualifiers") or []
-        if isinstance(quals, str):
+        quals = row.get("qualifiers")
+        if not quals:
             return False
-        quals_lower = [q.lower() for q in quals]
+
+        # If it's a string (e.g., from CSV), just substring search.
+        if isinstance(quals, str):
+            return "andone" in quals.lower()
+
+        # Otherwise, assume it's iterable and normalize.
+        try:
+            quals_lower = [str(q).lower() for q in quals]
+        except TypeError:
+            return False
+
         return "andone" in quals_lower
 
     df["is_and_one"] = df.apply(_is_and_one_row, axis=1)

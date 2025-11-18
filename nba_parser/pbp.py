@@ -29,10 +29,20 @@ class PbP:
         # done to handle PbP classes created from imported csv files versus
         # those that are created by nba_scraper that handles game_date as a
         # proper datetime dtype
+        # Handle both string and datetime-like game_date formats.
         if self.df["game_date"].dtypes == "O":
-            self.game_date = datetime.strptime(
-                pbp_df["game_date"].unique()[0], "%Y-%m-%d"
-            )
+            raw = str(pbp_df["game_date"].unique()[0])
+            parsed = None
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    parsed = datetime.strptime(raw, fmt)
+                    break
+                except ValueError:
+                    continue
+            if parsed is None:
+                # Fallback: let pandas try to infer.
+                parsed = pd.to_datetime(raw)
+            self.game_date = parsed
             self.df["game_date"] = pd.to_datetime(self.df["game_date"])
         else:
             self.game_date = pbp_df["game_date"].unique()[0]
@@ -1933,6 +1943,9 @@ class PbP:
             # Fallback when no events were parsed
             poss_df["points_for_offense"] = 0
             poss_df["points_for_defense"] = 0
+
+        # Backwards-compatibility: expose scoring in a single points column too.
+        poss_df["points_made"] = poss_df["points_for_offense"]
 
         return poss_df
 
