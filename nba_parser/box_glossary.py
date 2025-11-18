@@ -230,6 +230,24 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df["is_ft"] = fam == "free_throw"
     df["is_ft_make"] = df["is_ft"] & (df["points_made"] > 0)
 
+    # Identify the last free-throw attempt in a trip so rebound opportunities
+    # can include missed end-of-trip free throws.
+    if "ft_n" in df.columns and "ft_m" in df.columns:
+        try:
+            ft_n = df["ft_n"].fillna(0).astype(int)
+            ft_m = df["ft_m"].fillna(0).astype(int)
+            df["is_last_ft"] = (ft_n == ft_m) & (ft_n > 0)
+        except (ValueError, TypeError):
+            df["is_last_ft"] = False
+    else:
+        # Fallback heuristic when counters are missing: look for "X of X" text.
+        sub_lower = subfam.astype(str).str.lower()
+        df["is_last_ft"] = df["is_ft"] & (
+            sub_lower.str.contains("1 of 1")
+            | sub_lower.str.contains("2 of 2")
+            | sub_lower.str.contains("3 of 3")
+        )
+
     if "is_o_rebound" not in df.columns:
         df["is_o_rebound"] = 0
     if "is_d_rebound" not in df.columns:
@@ -511,8 +529,15 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                     key = (row.get("game_id"), block_team, pid)
                     _increment_count(exposures[key], "TM_BLK_OnCourt")
 
-        # Treat any missed FG attempt as an OREB/DREB opportunity, using the normalized flag.
-        if row.get("is_fg_attempt") and not bool(row.get("is_fg_make")):
+        # Rebound opportunities come from missed FGs and missed last free throws.
+        is_missed_fg = row.get("is_fg_attempt") and not bool(row.get("is_fg_make"))
+        is_missed_last_ft = (
+            row.get("is_ft")
+            and not bool(row.get("is_ft_make"))
+            and row.get("is_last_ft", False)
+        )
+
+        if is_missed_fg or is_missed_last_ft:
             shoot_team = row.get("team_id")
             home_on = home_ids
             away_on = away_ids
@@ -521,7 +546,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
             for pid in (home_on if shoot_team == row.get("home_team_id") else away_on):
                 if pid and pid != 0:
                     key = (row.get("game_id"), shoot_team, pid)
-                    _increment_count(exposures[key], "OnCourt_For_OREB_FGA")
+                    _increment_count(exposures[key], "OnCourt_For_OREB_Total")
 
             # Defensive rebound opportunities for the defending team
             opp_team = (
@@ -532,7 +557,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
             for pid in (away_on if shoot_team == row.get("home_team_id") else home_on):
                 if pid and pid != 0:
                     key = (row.get("game_id"), opp_team, pid)
-                    _increment_count(exposures[key], "OnCourt_For_DREB_FGA")
+                    _increment_count(exposures[key], "OnCourt_For_DREB_Total")
 
     poss_df = pbp._build_possessions(df, include_event_agg=True)
     for _, poss in poss_df.iterrows():
@@ -568,6 +593,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                 _increment_count(exposures[key], "OnCourt_Team_Points", def_points)
                 _increment_count(exposures[key], "OnCourt_Opp_3p_Att", poss.get("off_team_3PA", 0))
                 _increment_count(exposures[key], "OnCourt_Opp_3p_Made", poss.get("off_team_3PM", 0))
+                _increment_count(exposures[key], "OnCourt_Opp_2p_Att", poss.get("off_team_2PA", 0))
                 _increment_count(exposures[key], "OnCourt_Opp_FT_Att", poss.get("off_team_FTA", 0))
                 _increment_count(exposures[key], "OnCourt_Opp_FT_Made", poss.get("off_team_FTM", 0))
                 _increment_count(exposures[key], "OnCourt_Opp_FGA", poss.get("off_team_FGA", 0))
@@ -593,11 +619,12 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
         vals.setdefault("OnCourt_Opp_3p_Att", 0)
         vals.setdefault("OnCourt_Opp_FT_Made", 0)
         vals.setdefault("OnCourt_Opp_FT_Att", 0)
-        vals.setdefault("OnCourt_For_OREB_FGA", 0)
-        vals.setdefault("OnCourt_For_DREB_FGA", 0)
         vals.setdefault("TM_BLK_OnCourt", 0)
         vals.setdefault("OnCourt_Opp_FGM", 0)
         vals.setdefault("OnCourt_Opp_FGA", 0)
+        vals.setdefault("OnCourt_For_OREB_Total", 0)
+        vals.setdefault("OnCourt_For_DREB_Total", 0)
+        vals.setdefault("OnCourt_Opp_2p_Att", 0)
         exposure_rows.append({"game_id": game_id, "team_id": team_id, "player_id": player_id, **vals})
 
     exposure_df = pd.DataFrame(exposure_rows)
@@ -724,11 +751,28 @@ def build_player_box(
     merged["FTR_Att"] = np.where(merged["FGA"] > 0, merged["FTA"] / merged["FGA"], 0)
     merged["FTR_Made"] = np.where(merged["FGA"] > 0, merged["FTM"] / merged["FGA"], 0)
 
-    merged["ORBpct"] = np.where(merged["OnCourt_For_OREB_FGA"] > 0, merged.get("OREB", 0) / merged["OnCourt_For_OREB_FGA"], 0)
-    merged["DRBpct"] = np.where(merged["OnCourt_For_DREB_FGA"] > 0, merged.get("DREB", 0) / merged["OnCourt_For_DREB_FGA"], 0)
+    merged["ORBpct"] = np.where(
+        merged["OnCourt_For_OREB_Total"] > 0,
+        merged.get("OREB", 0) / merged["OnCourt_For_OREB_Total"],
+        0,
+    )
+    merged["DRBpct"] = np.where(
+        merged["OnCourt_For_DREB_Total"] > 0,
+        merged.get("DREB", 0) / merged["OnCourt_For_DREB_Total"],
+        0,
+    )
 
-    merged["ASTpct"] = np.where(merged["OnCourt_Team_FGM"] > 0, merged.get("AST", 0) / merged["OnCourt_Team_FGM"], 0)
-    merged["BLKPct"] = np.where(merged["OnCourt_Opp_FGA"] > 0, merged.get("BLK", 0) / merged["OnCourt_Opp_FGA"], 0)
+    teammate_fgm = merged["OnCourt_Team_FGM"] - merged.get("FGM", 0)
+    merged["ASTpct"] = np.where(
+        teammate_fgm > 0,
+        merged.get("AST", 0) / teammate_fgm,
+        0.0,
+    )
+    merged["BLKPct"] = np.where(
+        merged["OnCourt_Opp_2p_Att"] > 0,
+        merged.get("BLK", 0) / merged["OnCourt_Opp_2p_Att"],
+        0.0,
+    )
     merged["STLpct"] = np.where(merged["POSS_DEF"] > 0, merged.get("STL", 0) / merged["POSS_DEF"], 0)
     merged["TOVpct"] = np.where(merged["PossessionsUsed"] > 0, merged.get("TOV", 0) / merged["PossessionsUsed"], 0)
 

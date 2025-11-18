@@ -1257,12 +1257,14 @@ class PbP:
                         "off_team_FGM": 0,
                         "off_team_3PA": 0,
                         "off_team_3PM": 0,
+                        "off_team_2PA": 0,
                         "off_team_FTA": 0,
                         "off_team_FTM": 0,
                         "def_team_FGA": 0,
                         "def_team_FGM": 0,
                         "def_team_3PA": 0,
                         "def_team_3PM": 0,
+                        "def_team_2PA": 0,
                         "def_team_FTA": 0,
                         "def_team_FTM": 0,
                         "points_for_offense": 0,
@@ -1328,6 +1330,10 @@ class PbP:
                 poss_events.loc[off_mask, "is_fg_make"].astype(bool)
                 & poss_events.loc[off_mask, "is_three"].astype(bool)
             )
+            off_2pa_mask = (
+                poss_events.loc[off_mask, "is_fg_attempt"].astype(bool)
+                & ~poss_events.loc[off_mask, "is_three"].astype(bool)
+            )
 
             def_fga = poss_events.loc[def_mask, "is_fg_attempt"].sum()
             def_fgm = poss_events.loc[def_mask, "is_fg_make"].sum()
@@ -1338,6 +1344,10 @@ class PbP:
             def_3pm_mask = (
                 poss_events.loc[def_mask, "is_fg_make"].astype(bool)
                 & poss_events.loc[def_mask, "is_three"].astype(bool)
+            )
+            def_2pa_mask = (
+                poss_events.loc[def_mask, "is_fg_attempt"].astype(bool)
+                & ~poss_events.loc[def_mask, "is_three"].astype(bool)
             )
 
             off_points = poss_events.loc[off_mask, "points_made"].sum()
@@ -1353,12 +1363,14 @@ class PbP:
                     "off_team_FGM": off_fgm,
                     "off_team_3PA": off_3pa_mask.sum(),
                     "off_team_3PM": off_3pm_mask.sum(),
+                    "off_team_2PA": off_2pa_mask.sum(),
                     "off_team_FTA": poss_events.loc[off_mask, "is_ft"].sum(),
                     "off_team_FTM": poss_events.loc[off_mask, "is_ft_make"].sum(),
                     "def_team_FGA": def_fga,
                     "def_team_FGM": def_fgm,
                     "def_team_3PA": def_3pa_mask.sum(),
                     "def_team_3PM": def_3pm_mask.sum(),
+                    "def_team_2PA": def_2pa_mask.sum(),
                     "def_team_FTA": poss_events.loc[def_mask, "is_ft"].sum(),
                     "def_team_FTM": poss_events.loc[def_mask, "is_ft_make"].sum(),
                     "points_for_offense": off_points,
@@ -1393,12 +1405,14 @@ class PbP:
                     "off_team_FGM",
                     "off_team_3PA",
                     "off_team_3PM",
+                    "off_team_2PA",
                     "off_team_FTA",
                     "off_team_FTM",
                     "def_team_FGA",
                     "def_team_FGM",
                     "def_team_3PA",
                     "def_team_3PM",
+                    "def_team_2PA",
                     "def_team_FTA",
                     "def_team_FTM",
                 ]:
