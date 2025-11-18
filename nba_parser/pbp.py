@@ -27,6 +27,13 @@ class PbP:
 
     def __init__(self, pbp_df):
         self.df = pbp_df
+
+        # Enforce single-game input
+        game_ids = self.df["game_id"].unique()
+        if len(game_ids) != 1:
+            raise ValueError(
+                f"PbP expects a single-game DataFrame, but found game_ids={game_ids}"
+            )
         self.home_team = pbp_df["home_team_abbrev"].unique()[0]
         self.away_team = pbp_df["away_team_abbrev"].unique()[0]
         self.home_team_id = pbp_df["home_team_id"].unique()[0]
@@ -1682,6 +1689,54 @@ class PbP:
         poss_df = self._build_possessions(pbp_df, include_event_agg=True)
         return poss_df
 
+    def _compute_starters(self) -> pd.DataFrame:
+        """
+        Return a DataFrame with one row per (game_id, team_id, player_id)
+        marking whether the player started the game (Starts = 1).
+
+        Assumes this PbP instance is a single game.
+        """
+        df = self.df.copy()
+
+        # Sort by game clock so we consistently pick the earliest event
+        sort_cols = [c for c in ["period", "seconds_elapsed", "eventnum"] if c in df.columns]
+        if sort_cols:
+            df = df.sort_values(sort_cols)
+
+        lineup_cols = [
+            *(f"home_player_{i}_id" for i in range(1, 6)),
+            *(f"away_player_{i}_id" for i in range(1, 6)),
+        ]
+
+        mask = pd.Series(True, index=df.index)
+        for col in lineup_cols:
+            if col in df.columns:
+                mask &= df[col].notna() & (df[col] != 0)
+
+        lineup_df = df[mask] if not df.empty else df
+        first_row = lineup_df.iloc[0] if not lineup_df.empty else df.iloc[0]
+
+        home_ids = [first_row.get(f"home_player_{i}_id") for i in range(1, 6)]
+        away_ids = [first_row.get(f"away_player_{i}_id") for i in range(1, 6)]
+
+        starters = []
+        game_id = first_row.get("game_id")
+        home_team_id = first_row.get("home_team_id")
+        away_team_id = first_row.get("away_team_id")
+
+        for pid in home_ids:
+            if pid and pid != 0 and not pd.isna(pid):
+                starters.append(
+                    {"game_id": game_id, "team_id": home_team_id, "player_id": int(pid), "Starts": 1}
+                )
+        for pid in away_ids:
+            if pid and pid != 0 and not pd.isna(pid):
+                starters.append(
+                    {"game_id": game_id, "team_id": away_team_id, "player_id": int(pid), "Starts": 1}
+                )
+
+        return pd.DataFrame(starters)
+
     def player_box_glossary(
         self,
         player_meta: pd.DataFrame | None = None,
@@ -1708,14 +1763,48 @@ class PbP:
         counts_df = accumulate_player_counts(df)
         exposures_df = compute_on_court_exposures(self, df)
 
+        # Defensively filter player_meta to the current season to avoid duplicate rows
+        pm = player_meta
+        if pm is not None and not pm.empty:
+            pm = pm.copy()
+            # If player_meta includes a 'season' or 'Year' column, trim to this game's season
+            if "season" in pm.columns:
+                pm = pm[pm["season"] == self.season]
+            elif "Year" in pm.columns:
+                pm = pm[pm["Year"] == self.season]
+
+            # Ensure unique row per player identifier
+            if "NbaDotComID" in pm.columns:
+                pm = pm.drop_duplicates(subset=["NbaDotComID"])
+            elif "player_id" in pm.columns:
+                pm = pm.drop_duplicates(subset=["player_id"])
+
         box_df = build_player_box(
             df=df,
             counts_df=counts_df,
             exposures_df=exposures_df,
-            player_meta=player_meta,
+            player_meta=pm,
             game_meta=game_meta,
             pbg_stats=self.playerbygamestats()
         )
+
+        # Normalize potential merge artifacts from player_meta
+        if "player_id_x" in box_df.columns:
+            box_df["player_id"] = box_df["player_id_x"]
+            box_df.drop(columns=[c for c in ["player_id_x", "player_id_y"] if c in box_df.columns], inplace=True)
+
+        # Fill Starts from starting lineups
+        starters_df = self._compute_starters()
+        if not starters_df.empty:
+            # Preserve original Starts column if it exists, then merge
+            if "Starts" in box_df.columns:
+                box_df.rename(columns={"Starts": "Starts_x"}, inplace=True)
+            box_df = box_df.merge(
+                starters_df, on=["game_id", "team_id", "player_id"], how="left"
+            )
+            # Coalesce merged 'Starts' with original, fill NaNs with 0
+            box_df["Starts"] = box_df["Starts"].fillna(box_df.get("Starts_x", 0)).fillna(0).astype(int)
+            box_df.drop(columns=[c for c in box_df.columns if c.endswith("_x") or c == 'Starts_y'], inplace=True)
 
         # Sanity check: on-court points must match team totals.
         self._check_on_court_points_consistency(box_df)
