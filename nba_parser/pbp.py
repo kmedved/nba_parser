@@ -1066,8 +1066,10 @@ class PbP:
         Outputs:
         parsed_list  - list of dataframes where each list inside represents the players on
                        off and def and points score for each possession
+        used_indices - list of integer indices into poss_list corresponding to parsed_list
         """
         parsed_list = []
+        used_indices = []
 
         # Explicit list of player columns so we do not rely on column order
         # in the source DataFrame. This matches the expected order used when
@@ -1085,7 +1087,7 @@ class PbP:
             "away_player_5", "away_player_5_id",
         ]
 
-        for df in poss_list:
+        for seg_idx, df in enumerate(poss_list):
             if df.empty:
                 continue
 
@@ -1173,6 +1175,9 @@ class PbP:
                             ],
                         )
                     )
+
+                # Track which segment produced this possession row
+                used_indices.append(seg_idx)
                 else:
                     parsed_list.append(
                         pd.DataFrame(
@@ -1222,7 +1227,7 @@ class PbP:
 
             append_possession(off_abbrev)
 
-        return parsed_list
+        return parsed_list, used_indices
 
     def _build_possessions(self, df: pd.DataFrame, include_event_agg: bool = False):
         """
@@ -1246,7 +1251,7 @@ class PbP:
                 shift_dfs.append(seg)
             past_index = i
 
-        parsed_possessions = self.parse_possessions(shift_dfs)
+        parsed_possessions, used_indices = self.parse_possessions(shift_dfs)
 
         # If no possessions were detected, return an empty DataFrame
         if not parsed_possessions:
@@ -1392,12 +1397,8 @@ class PbP:
         if event_aggs:
             agg_df = pd.DataFrame(event_aggs)
 
-            # parse_possessions may drop segments; align aggregates to the
-            # possession rows before assignment.
-            if len(agg_df) != len(poss_df):
-                agg_df = agg_df.reindex(range(len(poss_df)))
-
-            agg_df = agg_df.reset_index(drop=True)
+            # Robustly align aggregates to the parsed possessions using the returned indices
+            agg_df = agg_df.iloc[used_indices].reset_index(drop=True)
 
             # Attach team IDs and abbreviations inferred in the event_aggs loop
             poss_df["off_team_id"] = agg_df["off_team_id"].values

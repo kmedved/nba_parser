@@ -793,7 +793,10 @@ def build_player_box(
         0,
     )
 
-    teammate_fgm = merged["OnCourt_Team_FGM"] - merged.get("FGM", 0)
+    teammate_fgm = np.maximum(
+        merged["OnCourt_Team_FGM"] - merged.get("FGM", 0),
+        0.0,
+    )
     merged["ASTpct"] = np.where(
         teammate_fgm > 0,
         merged.get("AST", 0) / teammate_fgm,
