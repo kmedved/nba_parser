@@ -215,18 +215,16 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                 if not pd.isna(p2) and p2 not in (0, shooter):
                     assist_id = p2
 
-            assisted = not (pd.isna(assist_id) or assist_id == 0)
+            assisted = bool(row.get("is_fg_make")) and not (
+                pd.isna(assist_id) or assist_id == 0
+            )
 
             if assisted:
                 # Shooter-level assisted makes
-                _increment_count(
-                    counts[key],
-                    "FGM_AST",
-                    1.0 if row.get("is_fg_make") else 0.0,
-                )
-                if row.get("is_three") and row.get("is_fg_make"):
+                _increment_count(counts[key], "FGM_AST", 1.0)
+                if row.get("is_three"):
                     _increment_count(counts[key], "ThreePM_AST")
-                if zone and row.get("is_fg_make"):
+                if zone:
                     _increment_count(counts[key], f"{zone}_FGM_AST")
 
                 # Passer-level AST counts (by zone + 3P)
@@ -288,21 +286,22 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
         if row.get("is_block") == 1:
             blocker = row.get("player3_id")
             block_team = row.get("player3_team_id")
-            block_key = (game_id, block_team, blocker)
-            if blocker and blocker != 0:
-                _increment_count(counts[block_key], "BLK")
             possession_after = row.get("possession_after")
             shooter_team = row.get("team_id")
-            # Heuristic:
-            # - If possession_after == block_team, we treat it as a "team recovered" block.
-            # - If possession_after == shooter_team, we treat it as a block where the opponent retained.
-            # - If possession_after is missing/ambiguous, default to BLK_Team.
-            if possession_after and possession_after == block_team:
-                _increment_count(counts[block_key], "BLK_Team")
-            elif possession_after and possession_after == shooter_team:
-                _increment_count(counts[block_key], "BLK_Opp")
-            else:
-                _increment_count(counts[block_key], "BLK_Team")
+
+            if blocker and blocker != 0:
+                block_key = (game_id, block_team, blocker)
+                _increment_count(counts[block_key], "BLK")
+                # Heuristic:
+                # - If possession_after == block_team, we treat it as a "team recovered" block.
+                # - If possession_after == shooter_team, we treat it as a block where the opponent retained.
+                # - If possession_after is missing/ambiguous, default to BLK_Team.
+                if possession_after and possession_after == block_team:
+                    _increment_count(counts[block_key], "BLK_Team")
+                elif possession_after and possession_after == shooter_team:
+                    _increment_count(counts[block_key], "BLK_Opp")
+                else:
+                    _increment_count(counts[block_key], "BLK_Team")
 
         if row.get("is_steal") == 1:
             stealer = row.get("player2_id")
