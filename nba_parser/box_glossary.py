@@ -187,7 +187,7 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     # --- And-ones via qualifiers ---
     quals_series = df["qualifiers"] if "qualifiers" in df.columns else pd.Series([None] * len(df), index=df.index)
     quals_str = quals_series.astype(str).str.lower()
-    df["is_and_one"] = quals_str.str.contains(r"and[ -]?one|and1")
+    df["is_and_one"] = quals_str.str.contains(r"and[ -]?one|and1", regex=True)
 
     # --- Shot zones ---
     shot_mask = df["is_fg_attempt"]
@@ -525,6 +525,7 @@ def build_player_box(
     player_meta: Optional[pd.DataFrame] = None,
     game_meta: Optional[pd.DataFrame] = None,
     pbg_stats: Optional[pd.DataFrame] = None,
+    restrict_to_pbg: bool = True,
 ) -> pd.DataFrame:
     merged = counts_df.merge(exposures_df, on=["game_id", "team_id", "player_id"], how="outer")
     merged.fillna(0, inplace=True)
@@ -603,9 +604,10 @@ def build_player_box(
 
     # Restrict to players that actually appear in the player-by-game stats.
     # This avoids including ghost rows from exposure-only artifacts.
-    if pbg_stats is not None and not pbg_stats.empty:
-        valid_player_ids = pbg_stats["player_id"].unique()
-        merged = merged[merged["player_id"].isin(valid_player_ids)]
+    if restrict_to_pbg:
+        if pbg_stats is not None and not pbg_stats.empty:
+            valid_player_ids = pbg_stats["player_id"].unique()
+            merged = merged[merged["player_id"].isin(valid_player_ids)]
 
     merged["Team_SingleGame"] = merged["team_id"]
     merged["Game_SingleGame"] = merged["game_id"]
@@ -622,6 +624,15 @@ def build_player_box(
         if "player_id" in pm.columns and "NbaDotComID" not in pm.columns:
             pm["NbaDotComID"] = pm["player_id"]
         merged = merged.merge(pm, on="NbaDotComID", how="left")
+
+    # NEW: derive PositionNum if we have Position but not PositionNum
+    if "Position" in merged.columns:
+        # Ensure PositionNum column exists before trying to fill it
+        if "PositionNum" not in merged.columns:
+            merged["PositionNum"] = np.nan
+        merged["PositionNum"] = merged["PositionNum"].where(
+            pd.notna(merged["PositionNum"]), merged["Position"].apply(position_to_num)
+        )
 
     if game_meta is not None and not game_meta.empty:
         merged = merged.merge(game_meta, on="game_id", how="left")
@@ -888,6 +899,8 @@ def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
         "home_fl",
         "h_tm_id",
         "v_tm_id",
+        "season",
+        "Year",
     }
     sum_cols = [c for c in numeric_cols if c not in do_not_sum]
 

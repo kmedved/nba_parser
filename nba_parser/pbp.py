@@ -1714,7 +1714,7 @@ class PbP:
             exposures_df=exposures_df,
             player_meta=player_meta,
             game_meta=game_meta,
-            pbg_stats=self.playerbygamestats(),
+            pbg_stats=self.playerbygamestats()
         )
 
         # Sanity check: on-court points must match team totals.
