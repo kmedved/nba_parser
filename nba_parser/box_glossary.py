@@ -3,8 +3,47 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Optional, Dict, Any, List, Tuple
 
+import re
+
 import numpy as np
 import pandas as pd
+
+# Mapping for base positions to numeric slots.
+# 1=PG, 2=SG, 3=SF, 4=PF, 5=C. "G" and "F" are midpoints.
+_BASE_POS_NUM = {
+    "PG": 1.0,
+    "SG": 2.0,
+    "SF": 3.0,
+    "PF": 4.0,
+    "C": 5.0,
+    "G": 1.5,   # generic guard between PG/SG
+    "F": 3.5,   # generic forward between SF/PF
+}
+
+
+def position_to_num(pos: Any) -> float | None:
+    """
+    Convert a position string like 'PG', 'SG', 'G-F', 'F-C' into a numeric
+    encoding. Returns NaN for unknown/missing positions.
+
+    Rules:
+      - Single positions map via _BASE_POS_NUM.
+      - Hyphen/slash separated combos (e.g. 'G-F', 'SF/PF') average the
+        numeric values of each token that is recognized.
+    """
+    if not isinstance(pos, str) or not pos:
+        return np.nan
+
+    pos_str = pos.upper().replace(" ", "")
+    tokens = re.split(r"[-/]", pos_str)
+    vals = [
+        _BASE_POS_NUM[t]
+        for t in tokens
+        if t in _BASE_POS_NUM
+    ]
+    if not vals:
+        return np.nan
+    return float(np.mean(vals))
 
 ZONE_BINS: List[Tuple[float, float, str]] = [
     (0.0, 3.0, "0_3"),
@@ -47,6 +86,12 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     # --- Subfamily normalization ---
     if "subfamily_de" in df.columns:
         subfam = df["subfamily_de"].fillna("")
+    elif "event_sub_family" in df.columns:
+        df["subfamily_de"] = df["event_sub_family"].fillna("")
+        subfam = df["subfamily_de"]
+    elif "event_subfamily" in df.columns:
+        df["subfamily_de"] = df["event_subfamily"].fillna("")
+        subfam = df["subfamily_de"]
     elif "subfamily" in df.columns:
         df["subfamily_de"] = df["subfamily"].fillna("")
         subfam = df["subfamily_de"]
@@ -108,7 +153,15 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df["is_ft_make"] = df["is_ft"] & (df["points_made"] > 0)
 
     # Three-pointers
-    df["is_three"] = df.get("is_three", 0).astype(bool)
+    if "is_three" in df.columns:
+        df["is_three"] = df["is_three"].fillna(0).astype(bool)
+    else:
+        # Fallback heuristic: treat long-distance FG attempts as 3s if distance is known.
+        dist = df.get("shot_distance")
+        if dist is not None:
+            df["is_three"] = (dist.astype(float) >= 23.0) & df["is_fg_attempt"]
+        else:
+            df["is_three"] = False
 
     # --- Turnover live/dead ---
     is_tov_family = fam == "turnover"
@@ -320,6 +373,18 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
 
         subfamily = row.get("subfamily_de") or row.get("subfamily")
         goaltend_flag = isinstance(subfamily, str) and "goaltend" in subfamily.lower()
+
+        # CDN feeds may encode goaltends via qualifiers instead of subfamily.
+        if not goaltend_flag:
+            quals = row.get("qualifiers")
+            if isinstance(quals, str):
+                goaltend_flag = "goaltend" in quals.lower()
+            else:
+                try:
+                    goaltend_flag = any("goaltend" in str(q).lower() for q in quals)
+                except TypeError:
+                    pass
+
         if goaltend_flag:
             goaltend_player = row.get("player3_id") or row.get("player1_id")
             goaltend_team = row.get("player3_team_id") or row.get("player1_team_id")
