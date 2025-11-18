@@ -133,7 +133,11 @@ def _vectorized_shot_zone(df: pd.DataFrame) -> pd.Series:
     """
     Vectorized calculation of shot zones.
     """
-    shot_distance = pd.to_numeric(df.get("shot_distance"), errors="coerce")
+    shot_col = df.get("shot_distance")
+    if shot_col is None:
+        shot_distance = pd.Series(np.nan, index=df.index)
+    else:
+        shot_distance = pd.to_numeric(shot_col, errors="coerce")
 
     area_col = df.get("area")
     if area_col is None:
