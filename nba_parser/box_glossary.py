@@ -472,7 +472,13 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
 
     for _, row in df.iterrows():
         player_id = row.get("player1_id")
-        team_id = row.get("player1_team_id")
+
+        # Prefer the normalized team_id from annotate_events (event_team +
+        # home/away mapping). Fall back to the raw player1_team_id when the
+        # normalized value is missing.
+        team_id = row.get("team_id")
+        if team_id is None or pd.isna(team_id) or team_id == 0:
+            team_id = row.get("player1_team_id")
         game_id = row.get("game_id")
 
         if not _valid_player_id(player_id):
@@ -830,6 +836,26 @@ def build_player_box(
     for col in ["team_id", "player_id"]:
         if col in merged.columns:
             merged[col] = pd.to_numeric(merged[col], errors="coerce").fillna(0).astype(int)
+
+    # Sanity check: players should not appear for multiple teams in one game.
+    dup_team = merged.groupby(["game_id", "player_id"])["team_id"].nunique()
+    bad = dup_team[dup_team > 1]
+    if strict_invariants and not bad.empty:
+        raise AssertionError(
+            "Player(s) appear for multiple teams in the same game: "
+            f"{list(bad.index)}. This usually indicates inconsistent team_id "
+            "between counts and exposures (check player1_team_id vs lineup columns)."
+        )
+    elif not bad.empty:
+        import warnings
+
+        warnings.warn(
+            "Player(s) appear for multiple teams in the same game; exposures"
+            " may be misaligned with counting stats. This usually indicates"
+            " inconsistent team_id between counts and exposures (check"
+            " player1_team_id vs lineup columns).",
+            RuntimeWarning,
+        )
 
     # Identify any rows where a player has on-court points credited but no minutes.
     # In clean data this should be rare; it typically indicates a mismatch between
@@ -1319,6 +1345,7 @@ def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
     do_not_sum = {
         "NbaDotComID",
         "PlayerID",
+        "player_id",
         "PlayerSeasonID",
         "Game_SingleGame",
         "Team_SingleGame",
@@ -1327,6 +1354,8 @@ def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
         "v_tm_id",
         "season",
         "Year",
+        "game_id",
+        "team_id",
     }
     sum_cols = [c for c in numeric_cols if c not in do_not_sum]
 
@@ -1357,6 +1386,7 @@ def append_team_totals(box_df: pd.DataFrame) -> pd.DataFrame:
     team_totals["NbaDotComID"] = 0
     team_totals["PlayerID"] = 0
     team_totals["PlayerSeasonID"] = 0
+    team_totals["player_id"] = 0
     team_totals["FullName"] = "TOTAL"
     team_totals["Player_Team"] = "TOTAL"
     team_totals["G"] = 1  # team played the game
