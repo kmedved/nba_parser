@@ -191,21 +191,32 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                 if row.get("is_fg_make"):
                     _increment_count(counts[key], f"{zone}_FGM")
 
+            # Assist handling:
+            # - Prefer explicit assist_id if present.
+            # - Fall back to player2_id on made shots for legacy pbp where
+            #   assists live in player2_id.
             assist_id = row.get("assist_id")
+            if (assist_id is None or pd.isna(assist_id) or assist_id == 0) and "player2_id" in row.index:
+                assist_id = row.get("player2_id")
+
             assisted = not (pd.isna(assist_id) or assist_id == 0)
-            if assisted:
-                _increment_count(counts[key], "FGM_AST", 1 if row.get("is_fg_make") else 0)
-                if row.get("is_three") and row.get("is_fg_make"):
+
+            # Only count assists on made field goals
+            if assisted and row.get("is_fg_make"):
+                # Shooter-level assisted makes
+                _increment_count(counts[key], "FGM_AST", 1.0)
+                if row.get("is_three"):
                     _increment_count(counts[key], "ThreePM_AST")
-                if zone and row.get("is_fg_make"):
+                if zone:
                     _increment_count(counts[key], f"{zone}_FGM_AST")
-                if assisted:
-                    ast_key = (game_id, row.get("team_id"), assist_id)
-                    _increment_count(counts[ast_key], "AST")
-                    if zone:
-                        _increment_count(counts[ast_key], f"AST_{zone}")
-                    if row.get("is_three"):
-                        _increment_count(counts[ast_key], "AST_3P")
+
+                # Passer-level AST counts by zone and 3P
+                ast_key = (game_id, row.get("team_id"), assist_id)
+                _increment_count(counts[ast_key], "AST")
+                if zone:
+                    _increment_count(counts[ast_key], f"AST_{zone}")
+                if row.get("is_three"):
+                    _increment_count(counts[ast_key], "AST_3P")
             else:
                 _increment_count(counts[key], "FGA_UNAST")
                 if row.get("is_fg_make"):

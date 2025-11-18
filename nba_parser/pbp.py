@@ -1951,11 +1951,20 @@ class PbP:
 
     def rapm_possessions(self):
         """
-        method to extract out all the rapm possessions to be able to run a RAPM
-        regression on later
+        Extract out all the rapm possessions to be able to run a RAPM
+        regression on later.
+
+        Uses the event-level scoring computed by _build_possessions(), which
+        returns points_for_offense / points_for_defense for each possession.
+
+        For backward compatibility, this also exposes a points_made column
+        equal to points_for_offense.
         """
         pbp_df = self.df.copy()
         poss_df = self._build_possessions(pbp_df, include_event_agg=False)
+
+        if "points_for_offense" in poss_df.columns:
+            poss_df["points_made"] = poss_df["points_for_offense"]
 
         return poss_df
 
