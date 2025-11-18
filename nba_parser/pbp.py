@@ -1808,11 +1808,11 @@ class PbP:
         parsed_possessions = self.parse_possessions(shift_dfs)
 
         event_aggs = []
-        if include_event_agg:
-            for poss_df in shift_dfs:
-                poss_events = annotate_events(poss_df.copy()) if not poss_df.empty else poss_df
-                if poss_events.empty:
-                    event_aggs.append({
+        for poss_df in shift_dfs:
+            poss_events = annotate_events(poss_df.copy()) if not poss_df.empty else poss_df
+            if poss_events.empty:
+                event_aggs.append(
+                    {
                         "off_team_FGA": 0,
                         "off_team_FGM": 0,
                         "off_team_3PA": 0,
@@ -1827,60 +1827,68 @@ class PbP:
                         "def_team_FTM": 0,
                         "points_for_offense": 0,
                         "points_for_defense": 0,
-                    })
-                    continue
-
-                last_event = poss_events.iloc[-1]
-                off_abbrev = last_event.get("event_team")
-                off_team_id = (
-                    last_event.get("home_team_id")
-                    if off_abbrev == last_event.get("home_team_abbrev")
-                    else last_event.get("away_team_id")
-                )
-                def_team_id = (
-                    last_event.get("away_team_id")
-                    if off_abbrev == last_event.get("home_team_abbrev")
-                    else last_event.get("home_team_id")
-                )
-                off_mask = poss_events["team_id"] == off_team_id
-                def_mask = poss_events["team_id"] == def_team_id
-                # After annotate_events, "points_made" is event-level scoring
-                # (prefer points_made_x if present). So offensive points for the
-                # possession are just the sum of those events for the offense.
-                points_col = "points_made"
-                if "points_made_x" in poss_events.columns:
-                    points_col = "points_made_x"
-                scoring_by_team = poss_events.groupby("team_id")[points_col].sum()
-                off_points = scoring_by_team.get(off_team_id, 0)
-                def_points = scoring_by_team.get(def_team_id, 0)
-
-                off_fga = poss_events.loc[off_mask, "is_fg_attempt"].sum()
-                off_fgm = poss_events.loc[off_mask, "is_fg_make"].sum()
-                off_3pa = poss_events.loc[off_mask, "is_fg_attempt"].astype(bool) & poss_events.loc[off_mask, "is_three"].astype(bool)
-                off_3pm = poss_events.loc[off_mask, "is_fg_make"].astype(bool) & poss_events.loc[off_mask, "is_three"].astype(bool)
-                def_fga = poss_events.loc[def_mask, "is_fg_attempt"].sum()
-                def_fgm = poss_events.loc[def_mask, "is_fg_make"].sum()
-                def_3pa = poss_events.loc[def_mask, "is_fg_attempt"].astype(bool) & poss_events.loc[def_mask, "is_three"].astype(bool)
-                def_3pm = poss_events.loc[def_mask, "is_fg_make"].astype(bool) & poss_events.loc[def_mask, "is_three"].astype(bool)
-
-                event_aggs.append(
-                    {
-                        "off_team_FGA": off_fga,
-                        "off_team_FGM": off_fgm,
-                        "off_team_3PA": off_3pa.sum() if hasattr(off_3pa, "sum") else 0,
-                        "off_team_3PM": off_3pm.sum() if hasattr(off_3pm, "sum") else 0,
-                        "off_team_FTA": poss_events.loc[off_mask, "is_ft"].sum(),
-                        "off_team_FTM": poss_events.loc[off_mask, "is_ft_make"].sum(),
-                        "def_team_FGA": def_fga,
-                        "def_team_FGM": def_fgm,
-                        "def_team_3PA": def_3pa.sum() if hasattr(def_3pa, "sum") else 0,
-                        "def_team_3PM": def_3pm.sum() if hasattr(def_3pm, "sum") else 0,
-                        "def_team_FTA": poss_events.loc[def_mask, "is_ft"].sum(),
-                        "def_team_FTM": poss_events.loc[def_mask, "is_ft_make"].sum(),
-                        "points_for_offense": off_points,
-                        "points_for_defense": def_points,
                     }
                 )
+                continue
+
+            last_event = poss_events.iloc[-1]
+            off_abbrev = last_event.get("event_team")
+            off_team_id = (
+                last_event.get("home_team_id")
+                if off_abbrev == last_event.get("home_team_abbrev")
+                else last_event.get("away_team_id")
+            )
+            def_team_id = (
+                last_event.get("away_team_id")
+                if off_abbrev == last_event.get("home_team_abbrev")
+                else last_event.get("home_team_id")
+            )
+
+            off_mask = poss_events.get("team_id") == off_team_id
+            def_mask = poss_events.get("team_id") == def_team_id
+
+            off_fga = poss_events.loc[off_mask, "is_fg_attempt"].sum()
+            off_fgm = poss_events.loc[off_mask, "is_fg_make"].sum()
+            off_3pa = (
+                poss_events.loc[off_mask, "is_fg_attempt"].astype(bool)
+                & poss_events.loc[off_mask, "is_three"].astype(bool)
+            )
+            off_3pm = (
+                poss_events.loc[off_mask, "is_fg_make"].astype(bool)
+                & poss_events.loc[off_mask, "is_three"].astype(bool)
+            )
+            def_fga = poss_events.loc[def_mask, "is_fg_attempt"].sum()
+            def_fgm = poss_events.loc[def_mask, "is_fg_make"].sum()
+            def_3pa = (
+                poss_events.loc[def_mask, "is_fg_attempt"].astype(bool)
+                & poss_events.loc[def_mask, "is_three"].astype(bool)
+            )
+            def_3pm = (
+                poss_events.loc[def_mask, "is_fg_make"].astype(bool)
+                & poss_events.loc[def_mask, "is_three"].astype(bool)
+            )
+
+            off_points = poss_events.loc[off_mask, "points_made"].sum()
+            def_points = poss_events.loc[def_mask, "points_made"].sum()
+
+            event_aggs.append(
+                {
+                    "off_team_FGA": off_fga,
+                    "off_team_FGM": off_fgm,
+                    "off_team_3PA": off_3pa.sum() if hasattr(off_3pa, "sum") else 0,
+                    "off_team_3PM": off_3pm.sum() if hasattr(off_3pm, "sum") else 0,
+                    "off_team_FTA": poss_events.loc[off_mask, "is_ft"].sum(),
+                    "off_team_FTM": poss_events.loc[off_mask, "is_ft_make"].sum(),
+                    "def_team_FGA": def_fga,
+                    "def_team_FGM": def_fgm,
+                    "def_team_3PA": def_3pa.sum() if hasattr(def_3pa, "sum") else 0,
+                    "def_team_3PM": def_3pm.sum() if hasattr(def_3pm, "sum") else 0,
+                    "def_team_FTA": poss_events.loc[def_mask, "is_ft"].sum(),
+                    "def_team_FTM": poss_events.loc[def_mask, "is_ft_make"].sum(),
+                    "points_for_offense": off_points,
+                    "points_for_defense": def_points,
+                }
+            )
 
         poss_df = pd.concat(parsed_possessions, sort=True)
 
@@ -1900,13 +1908,30 @@ class PbP:
             poss_df["away_team_id"],
             poss_df["home_team_id"],
         )
-        if include_event_agg and event_aggs:
+        if event_aggs:
             agg_df = pd.DataFrame(event_aggs)
-            for col in agg_df.columns:
-                poss_df[col] = agg_df[col].values
+            poss_df["points_for_offense"] = agg_df["points_for_offense"].values
+            poss_df["points_for_defense"] = agg_df["points_for_defense"].values
+
+            if include_event_agg:
+                for col in [
+                    "off_team_FGA",
+                    "off_team_FGM",
+                    "off_team_3PA",
+                    "off_team_3PM",
+                    "off_team_FTA",
+                    "off_team_FTM",
+                    "def_team_FGA",
+                    "def_team_FGM",
+                    "def_team_3PA",
+                    "def_team_3PM",
+                    "def_team_FTA",
+                    "def_team_FTM",
+                ]:
+                    poss_df[col] = agg_df[col].values
         else:
-            # Fallback when event-level aggregates are not requested
-            poss_df["points_for_offense"] = poss_df["points_made"]
+            # Fallback when no events were parsed
+            poss_df["points_for_offense"] = 0
             poss_df["points_for_defense"] = 0
 
         return poss_df
