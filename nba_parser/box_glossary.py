@@ -364,7 +364,9 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     # --- Shot zones ---
     shot_mask = df["is_fg_attempt"]
     if "shot_distance" in df.columns or "area" in df.columns:
-        df["shot_zone"] = np.where(shot_mask, _vectorized_shot_zone(df), None)
+        zones = _vectorized_shot_zone(df)
+        zones = zones.where(shot_mask, None)
+        df["shot_zone"] = zones
     else:
         df["shot_zone"] = None
 
