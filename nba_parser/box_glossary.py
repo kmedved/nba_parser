@@ -242,6 +242,8 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
         is_shot_like = df["is_fg_attempt"].fillna(False)
     else:
         is_shot_like = fam.isin(["shot", "miss_shot", "missed_shot"])
+        # extra robustness for non-standard inputs:
+        is_shot_like |= fam.isin(["2pt", "3pt"])
     df["is_fg_attempt"] = is_shot_like.astype(bool)
 
     if "is_fg_make" in df.columns:
@@ -745,6 +747,7 @@ def build_player_box(
     game_meta: Optional[pd.DataFrame] = None,
     restrict_to_pbg: bool = False,
     player_game_meta: Optional[pd.DataFrame] = None,
+    strict_invariants: bool = False,
 ) -> pd.DataFrame:
     merged = counts_df.merge(exposures_df, on=["game_id", "team_id", "player_id"], how="outer")
     merged.fillna(0, inplace=True)
@@ -765,15 +768,15 @@ def build_player_box(
         )
     ]
 
-    # For now, keep such rows so that on-court scoring sums remain consistent
-    # with team totals (tests enforce this). If you want to treat these as hard
-    # errors in a debugging context, you can uncomment the assertion below.
-    #
-    # if not zero_minute_with_points.empty:
-    #     raise AssertionError(
-    #         "Found zero-minute rows with non-zero on-court points; "
-    #         "this indicates an upstream bug in exposures/timing logic."
-    #     )
+    if strict_invariants and not zero_minute_with_points.empty:
+        raise AssertionError(
+            "Found zero-minute rows with non-zero on-court points; "
+            "this indicates an upstream bug in exposures/timing logic."
+        )
+
+    # By default, keep such rows so that on-court scoring sums remain consistent
+    # with team totals (tests enforce this). When strict_invariants is True the
+    # function raises instead of continuing.
     if not zero_minute_with_points.empty:
         import warnings
 
