@@ -77,17 +77,55 @@ def classify_shot_zone(shot_distance: float | None, area: str | None) -> Optiona
     return None
 
 
-def _vectorized_is_and_one(qualifiers: pd.Series) -> pd.Series:
+def _qualifier_to_str(val: Any) -> str:
+    """
+    Normalize a single qualifiers cell to a safe, lowercase string.
+
+    Intended for use anywhere we parse the `qualifiers` column, which can be:
+      - None / NaN / pd.NA
+      - a scalar string (e.g. "GOALTEND")
+      - a list/tuple/dict (e.g. ["and1", "second_chance"])
+      - other objects
+
+    Rules:
+      - None / NaN (scalar float nan) -> ""
+      - everything else -> str(val).lower()
+    """
+    if val is None:
+        return ""
+
+    # Treat scalar NaN (Python or NumPy float) as empty.
+    if isinstance(val, (float, np.floating)) and np.isnan(val):
+        return ""
+
+    # Lists / tuples / dicts / arrays / strings:
+    # use their string repr and lower-case it.
+    return str(val).lower()
+
+
+def _vectorized_is_and_one(qualifiers: pd.Series | None) -> pd.Series:
     """
     Vectorized check for And-One events.
-    Assumes qualifiers is a Series indexed like the pbp DataFrame.
+
+    Accepts a Series whose values may be:
+      - strings
+      - lists/tuples/dicts
+      - None / NaN / pd.NA
+
+    Returns a boolean Series indexed like the input.
     """
-    if qualifiers is None or len(qualifiers) == 0:
-        if isinstance(qualifiers, pd.Series):
-            return pd.Series(False, index=qualifiers.index)
+    if qualifiers is None:
+        # No qualifiers at all: return empty bool Series
         return pd.Series(dtype=bool)
 
-    q_str = qualifiers.fillna("").astype(str).str.lower()
+    if len(qualifiers) == 0:
+        # Preserve index on empty Series
+        return pd.Series(False, index=qualifiers.index, dtype=bool)
+
+    # Normalize every cell to a lowercase string using the shared helper.
+    q_str = qualifiers.apply(_qualifier_to_str)
+
+    # Same regex semantics as before.
     return q_str.str.contains(r"and[ -]?one|and1", regex=True)
 
 
@@ -270,8 +308,8 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     if "ft_n" in df.columns and "ft_m" in df.columns:
         try:
-            ft_n = pd.to_numeric(df["ft_n"], errors="raise").fillna(0).astype("int64")
-            ft_m = pd.to_numeric(df["ft_m"], errors="raise").fillna(0).astype("int64")
+            ft_n = pd.to_numeric(df["ft_n"], errors="coerce").fillna(0).astype(int)
+            ft_m = pd.to_numeric(df["ft_m"], errors="coerce").fillna(0).astype(int)
             df["is_last_ft"] = (ft_n == ft_m) & (ft_n > 0)
         except (ValueError, TypeError):
             # If conversion fails (e.g., bad data), use the heuristic fallback
@@ -352,13 +390,14 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- Goaltends (Centralized) ---
     goaltend_flag = sub.str.contains("goaltend")
+
     # CDN feeds may encode goaltends via qualifiers instead of subfamily.
     if "qualifiers" in df.columns:
-        # Handle various qualifier formats (list, string, or NaN) robustly
-        quals_str = df["qualifiers"].apply(
-            lambda x: str(x).lower() if not pd.isna(x) else ""
-        )
+        # Use the shared normalizer so we don't care if qualifiers is a string,
+        # list, dict, NaN, etc.
+        quals_str = df["qualifiers"].apply(_qualifier_to_str)
         goaltend_flag = goaltend_flag | quals_str.str.contains("goaltend")
+
     df["is_goaltend"] = goaltend_flag
 
     # --- Shot zones ---
