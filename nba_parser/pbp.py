@@ -1187,23 +1187,27 @@ class PbP:
                         df.loc[df.index[-1], "event_team"]
                         == df.loc[df.index[-1], "away_team_abbrev"]
                     ):
+                        # Defensive rebound by away team: offense was home team
+                        tail = df.loc[
+                            df.index[-1],
+                            [
+                                "points_made",
+                                "home_team_abbrev",
+                                "event_team",
+                                "away_team_abbrev",
+                                "home_team_id",
+                                "away_team_id",
+                                "game_id",
+                                "game_date",
+                                "season",
+                            ],
+                        ].copy()
+                        tail["event_team"] = tail["home_team_abbrev"]
+
                         row_df = pd.concat(
                             [
                                 df.loc[df.index[-1], player_cols],
-                                df.loc[
-                                    df.index[-1],
-                                    [
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                ],
+                                tail,
                             ]
                         )
 
@@ -1250,23 +1254,27 @@ class PbP:
                         df.loc[df.index[-1], "event_team"]
                         == df.loc[df.index[-1], "home_team_abbrev"]
                     ):
+                        # Defensive rebound by home team: offense was away team
+                        tail = df.loc[
+                            df.index[-1],
+                            [
+                                "points_made",
+                                "home_team_abbrev",
+                                "event_team",
+                                "away_team_abbrev",
+                                "home_team_id",
+                                "away_team_id",
+                                "game_id",
+                                "game_date",
+                                "season",
+                            ],
+                        ].copy()
+                        tail["event_team"] = tail["away_team_abbrev"]
+
                         row_df = pd.concat(
                             [
                                 df.loc[df.index[-1], player_cols],
-                                df.loc[
-                                    df.index[-1],
-                                    [
-                                        "points_made",
-                                        "home_team_abbrev",
-                                        "event_team",
-                                        "away_team_abbrev",
-                                        "home_team_id",
-                                        "away_team_id",
-                                        "game_id",
-                                        "game_date",
-                                        "season",
-                                    ],
-                                ],
+                                tail,
                             ]
                         )
 
