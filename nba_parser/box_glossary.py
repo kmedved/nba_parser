@@ -206,8 +206,14 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
             # - Fall back to player2_id on made shots for legacy pbp where
             #   assists are stored as player2_id.
             assist_id = row.get("assist_id")
+
+            # Legacy v2 fallback: sometimes the assist lives in player2_id.
+            # Make sure we don't accidentally use the shooter as the assister.
             if (assist_id is None or pd.isna(assist_id) or assist_id == 0) and "player2_id" in row.index:
-                assist_id = row.get("player2_id")
+                p2 = row.get("player2_id")
+                shooter = row.get("player1_id")
+                if not pd.isna(p2) and p2 not in (0, shooter):
+                    assist_id = p2
 
             assisted = not (pd.isna(assist_id) or assist_id == 0)
 
@@ -287,6 +293,10 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                 _increment_count(counts[block_key], "BLK")
             possession_after = row.get("possession_after")
             shooter_team = row.get("team_id")
+            # Heuristic:
+            # - If possession_after == block_team, we treat it as a "team recovered" block.
+            # - If possession_after == shooter_team, we treat it as a block where the opponent retained.
+            # - If possession_after is missing/ambiguous, default to BLK_Team.
             if possession_after and possession_after == block_team:
                 _increment_count(counts[block_key], "BLK_Team")
             elif possession_after and possession_after == shooter_team:
