@@ -795,6 +795,10 @@ def build_player_box(
         0,
     )
 
+    # Alias rebound opportunity totals to glossary column names
+    merged["OnCourt_For_OREB_FGA"] = merged.get("OnCourt_For_OREB_Total", 0)
+    merged["OnCourt_For_DREB_FGA"] = merged.get("OnCourt_For_DREB_Total", 0)
+
     teammate_fgm = np.maximum(
         merged["OnCourt_Team_FGM"] - merged.get("FGM", 0),
         0.0,
