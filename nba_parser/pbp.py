@@ -1785,7 +1785,6 @@ class PbP:
             exposures_df=exposures_df,
             player_meta=pm,
             game_meta=game_meta,
-            pbg_stats=self.playerbygamestats()
         )
 
         # Normalize potential merge artifacts from player_meta

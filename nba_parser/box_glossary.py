@@ -78,6 +78,48 @@ def classify_shot_zone(shot_distance: float | None, area: str | None) -> Optiona
     return None
 
 
+def _vectorized_is_and_one(qualifiers: pd.Series) -> pd.Series:
+    """
+    Vectorized check for And-One events.
+    """
+    if qualifiers is None:
+        return pd.Series(dtype=bool)
+
+    if not isinstance(qualifiers, pd.Series):
+        qualifiers = pd.Series(qualifiers)
+
+    if qualifiers.empty:
+        return pd.Series(False, index=qualifiers.index)
+
+    q_str = qualifiers.fillna("").astype(str).str.lower()
+    return q_str.str.contains(r"and[ -]?one|and1", regex=True)
+
+
+def _vectorized_shot_zone(df: pd.DataFrame) -> pd.Series:
+    """
+    Vectorized calculation of shot zones.
+    """
+    shot_distance = pd.to_numeric(df.get("shot_distance"), errors="coerce")
+    area = df.get("area", pd.Series(dtype=str)).fillna("").astype(str).str.lower()
+
+    # Initialize zones as None (object type to hold strings or None)
+    zones = pd.Series(None, index=df.index, dtype=object)
+
+    # Bins based on distance
+    dist_mask = shot_distance.notna()
+    zones[dist_mask & (shot_distance <= 3.0)] = "0_3"
+    zones[dist_mask & (shot_distance > 3.0) & (shot_distance <= 9.0)] = "4_9"
+    zones[dist_mask & (shot_distance > 9.0) & (shot_distance <= 17.0)] = "10_17"
+    zones[dist_mask & (shot_distance > 17.0) & (shot_distance <= 23.0)] = "18_23"
+
+    # Fallback to area text where distance-based zone is still missing
+    fallback_mask = zones.isna()
+    zones[fallback_mask & area.str.contains("restricted")] = "0_3"
+    zones[fallback_mask & area.str.contains("paint")] = "4_9"
+
+    return zones
+
+
 def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     # Preserve original upstream family (e.g., "2pt", "3pt") for debugging.
@@ -111,6 +153,12 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     fam = fam_src.astype(str).str.lower().str.replace("-", "_", regex=False)
     df["family"] = fam
 
+    # --- Event team id ---
+    if "home_team_id" not in df.columns:
+        df["home_team_id"] = np.nan
+    if "away_team_id" not in df.columns:
+        df["away_team_id"] = np.nan
+    if "team_id" not in df.columns:
     # --- Event team id (robust normalization) ---
     if "team_id" in df.columns:
         team_id = df["team_id"].copy()
@@ -159,14 +207,19 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
             df["points_made"] = 0
 
     # --- FGA/FGM/FT flags ---
-    is_shot_like = fam.isin(["shot", "miss_shot", "missed_shot"])
-    df["is_fg_attempt"] = is_shot_like
+    if "is_fg_attempt" in df.columns:
+        is_shot_like = df["is_fg_attempt"].fillna(False)
+    else:
+        is_shot_like = fam.isin(["shot", "miss_shot", "missed_shot"])
+    df["is_fg_attempt"] = is_shot_like.astype(bool)
 
-    if "shot_made" in df.columns:
+    if "is_fg_make" in df.columns:
+        df["is_fg_make"] = df["is_fg_attempt"] & df["is_fg_make"].fillna(0).astype(bool)
+    elif "shot_made" in df.columns:
         df["shot_made"] = df["shot_made"].fillna(0).astype(int)
         df["is_fg_make"] = df["is_fg_attempt"] & (df["shot_made"] == 1)
     else:
-        df["is_fg_make"] = (fam == "shot") & (df["points_made"] > 0)
+        df["is_fg_make"] = df["is_fg_attempt"] & (df["points_made"] > 0)
 
     df["is_ft"] = fam == "free_throw"
     df["is_ft_make"] = df["is_ft"] & (df["points_made"] > 0)
@@ -186,6 +239,10 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     is_tov_family = fam == "turnover"
 
     # Anything recorded as a steal is a live-ball turnover.
+    steal_col = df.get("is_steal")
+    if steal_col is None:
+        steal_col = pd.Series([0] * len(df), index=df.index)
+    is_steal_flag = steal_col.fillna(0).astype(int) == 1
     is_steal_raw = df.get("is_steal")
     if is_steal_raw is None:
         is_steal_raw = pd.Series([0] * len(df), index=df.index)
@@ -208,19 +265,14 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- And-ones via qualifiers ---
     quals_series = df["qualifiers"] if "qualifiers" in df.columns else pd.Series([None] * len(df), index=df.index)
-    quals_str = quals_series.astype(str).str.lower()
-    df["is_and_one"] = quals_str.str.contains(r"and[ -]?one|and1", regex=True)
+    df["is_and_one"] = _vectorized_is_and_one(quals_series)
 
     # --- Shot zones ---
     shot_mask = df["is_fg_attempt"]
-    df["shot_zone"] = np.where(
-        shot_mask,
-        df.apply(
-            lambda r: classify_shot_zone(r.get("shot_distance"), r.get("area")),
-            axis=1,
-        ),
-        None,
-    )
+    if "shot_distance" in df.columns or "area" in df.columns:
+        df["shot_zone"] = np.where(shot_mask, _vectorized_shot_zone(df), None)
+    else:
+        df["shot_zone"] = None
 
     # --- Off/def team ids for event-level context ---
     off_mask = df["is_fg_attempt"] | df["is_ft"] | (df["family"] == "turnover")
@@ -251,41 +303,42 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
         key = (game_id, team_id, player_id)
 
         if row.get("is_fg_attempt"):
-            _increment_count(counts[key], "FGA")
-            if row.get("is_fg_make"):
-                _increment_count(counts[key], "FGM")
-            if row.get("is_three"):
-                _increment_count(counts[key], "ThreePA")
-                if row.get("is_fg_make"):
-                    _increment_count(counts[key], "ThreePM")
+            is_make = bool(row.get("is_fg_make"))
+            is_three = bool(row.get("is_three"))
             zone = row.get("shot_zone")
+
+            # Base FGA / FGM / 3PA / 3PM and zonal FGA/FGM
+            _increment_count(counts[key], "FGA")
+            if is_make:
+                _increment_count(counts[key], "FGM")
+            if is_three:
+                _increment_count(counts[key], "ThreePA")
+                if is_make:
+                    _increment_count(counts[key], "ThreePM")
             if zone:
                 _increment_count(counts[key], f"{zone}_FGA")
-                if row.get("is_fg_make"):
+                if is_make:
                     _increment_count(counts[key], f"{zone}_FGM")
 
             # Assist handling:
-            # - Prefer explicit assist_id (CDN-era pbp).
-            # - Fall back to player2_id on made shots for legacy pbp where
-            #   assists are stored as player2_id.
-            assist_id = row.get("assist_id")
+            #   - Only for made shots.
+            #   - Prefer explicit assist_id, fallback to player2_id for v2.
+            assist_id = None
+            if is_make:
+                assist_id = row.get("assist_id")
+                if pd.isna(assist_id) or assist_id == 0:
+                    if "player2_id" in row.index:
+                        p2 = row.get("player2_id")
+                        shooter = row.get("player1_id")
+                        if not pd.isna(p2) and p2 not in (0, shooter):
+                            assist_id = p2
 
-            # Legacy v2 fallback: sometimes the assist lives in player2_id.
-            # Make sure we don't accidentally use the shooter as the assister.
-            if (assist_id is None or pd.isna(assist_id) or assist_id == 0) and "player2_id" in row.index:
-                p2 = row.get("player2_id")
-                shooter = row.get("player1_id")
-                if not pd.isna(p2) and p2 not in (0, shooter):
-                    assist_id = p2
-
-            assisted = bool(row.get("is_fg_make")) and not (
-                pd.isna(assist_id) or assist_id == 0
-            )
+            assisted = is_make and not (assist_id is None or pd.isna(assist_id) or assist_id == 0)
 
             if assisted:
                 # Shooter-level assisted makes
                 _increment_count(counts[key], "FGM_AST", 1.0)
-                if row.get("is_three"):
+                if is_three:
                     _increment_count(counts[key], "ThreePM_AST")
                 if zone:
                     _increment_count(counts[key], f"{zone}_FGM_AST")
@@ -295,19 +348,21 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
                 _increment_count(counts[ast_key], "AST")
                 if zone:
                     _increment_count(counts[ast_key], f"AST_{zone}")
-                if row.get("is_three"):
+                if is_three:
                     _increment_count(counts[ast_key], "AST_3P")
-            else:
+
+            # Unassisted accounting (for both missed shots and unassisted makes)
+            if not assisted:
                 _increment_count(counts[key], "FGA_UNAST")
-                if row.get("is_fg_make"):
+                if is_make:
                     _increment_count(counts[key], "FGM_UNAST")
-                if row.get("is_three"):
+                if is_three:
                     _increment_count(counts[key], "ThreePA_UNAST")
-                    if row.get("is_fg_make"):
+                    if is_make:
                         _increment_count(counts[key], "ThreePM_UNAST")
                 if zone:
                     _increment_count(counts[key], f"{zone}_FGA_UNAST")
-                    if row.get("is_fg_make"):
+                    if is_make:
                         _increment_count(counts[key], f"{zone}_FGM_UNAST")
 
         if row.get("family") == "free_throw":
@@ -533,10 +588,6 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
 
     exposure_df = pd.DataFrame(exposure_rows)
 
-    # Ensure MPG and MPG_R reflect the final Minutes value
-    exposure_df["MPG"] = exposure_df["Minutes"]
-    exposure_df["MPG_R"] = exposure_df["MPG"] / 5.0
-
     return exposure_df
 
 
@@ -546,7 +597,6 @@ def build_player_box(
     exposures_df: pd.DataFrame,
     player_meta: Optional[pd.DataFrame] = None,
     game_meta: Optional[pd.DataFrame] = None,
-    pbg_stats: Optional[pd.DataFrame] = None,
     restrict_to_pbg: bool = True,
 ) -> pd.DataFrame:
     merged = counts_df.merge(exposures_df, on=["game_id", "team_id", "player_id"], how="outer")
@@ -591,45 +641,10 @@ def build_player_box(
         )
     ]
 
-    if pbg_stats is not None:
-        pbg_subset = pbg_stats[[
-            "game_id",
-            "team_id",
-            "player_id",
-            "fgm",
-            "fga",
-            "tpm",
-            "tpa",
-            "ftm",
-            "fta",
-            "points",
-        ]].copy()
-        pbg_subset.fillna(0, inplace=True)
-        merged = merged.merge(
-            pbg_subset,
-            on=["game_id", "team_id", "player_id"],
-            how="left",
-            suffixes=("", "_pbg"),
-        )
-        for src, dest in [
-            ("fgm", "FGM"),
-            ("fga", "FGA"),
-            ("tpm", "ThreePM"),
-            ("tpa", "ThreePA"),
-            ("ftm", "FTM"),
-            ("fta", "FTA"),
-            ("points", "PTS"),
-        ]:
-            col_src = f"{src}_pbg" if f"{src}_pbg" in merged.columns else src
-            merged[dest] = merged[col_src].fillna(merged.get(dest, 0))
-        merged.drop(columns=[c for c in merged.columns if c.endswith("_pbg") or c in ["fgm","fga","tpm","tpa","ftm","fta","points"]], inplace=True)
-
     # Restrict to players that actually appear in the player-by-game stats.
     # This avoids including ghost rows from exposure-only artifacts.
     if restrict_to_pbg:
-        if pbg_stats is not None and not pbg_stats.empty:
-            valid_player_ids = pbg_stats["player_id"].unique()
-            merged = merged[merged["player_id"].isin(valid_player_ids)]
+        merged = merged[merged["Minutes"] > 0]
 
     merged["Team_SingleGame"] = merged["team_id"]
     merged["Game_SingleGame"] = merged["game_id"]
@@ -645,6 +660,7 @@ def build_player_box(
         pm = player_meta.copy()
         if "player_id" in pm.columns and "NbaDotComID" not in pm.columns:
             pm["NbaDotComID"] = pm["player_id"]
+            pm = pm.drop(columns=["player_id"])
         merged = merged.merge(pm, on="NbaDotComID", how="left")
 
     # NEW: derive PositionNum if we have Position but not PositionNum
@@ -659,14 +675,23 @@ def build_player_box(
     if game_meta is not None and not game_meta.empty:
         merged = merged.merge(game_meta, on="game_id", how="left")
 
-    merged["G"] = np.where(merged["Minutes"] > 0, 1, 0)
-    merged["Inactive"] = 0
-    merged["DNP"] = 0
-    merged["DNP_Rest"] = 0
-    merged["DNP_CD"] = 0
-    merged["DNP_SingleGame"] = 0
-    merged["Starts"] = 0
-    merged["PlayoffGamesPlayed"] = 0
+    # Set metadata defaults only if they don't already exist from a merge
+    if "G" not in merged.columns:
+        merged["G"] = np.where(merged["Minutes"] > 0, 1, 0)
+    
+    meta_defaults = {
+        "Inactive": 0, "DNP": 0, "DNP_Rest": 0, "DNP_CD": 0,
+        "DNP_SingleGame": 0, "Starts": 0, "PlayoffGamesPlayed": 0,
+    }
+    for col, default_val in meta_defaults.items():
+        if col not in merged.columns:
+            merged[col] = default_val
+        else:
+            merged[col] = merged[col].fillna(default_val)
+
+    for col in ["ThreePA_UNAST", "ThreePM_UNAST", "FGA_UNAST", "FGM_UNAST"]:
+        if col not in merged.columns:
+            merged[col] = 0
 
     merged["TSAttempts"] = merged["FGA"] + 0.44 * merged["FTA"]
     merged["TSpct"] = np.where(
