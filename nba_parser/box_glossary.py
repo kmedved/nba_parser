@@ -155,13 +155,12 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     fam = fam_src.astype(str).str.lower().str.replace("-", "_", regex=False)
     df["family"] = fam
 
-    # --- Event team id ---
+    # --- Event team id (robust normalization) ---
     if "home_team_id" not in df.columns:
         df["home_team_id"] = np.nan
     if "away_team_id" not in df.columns:
         df["away_team_id"] = np.nan
-    if "team_id" not in df.columns:
-    # --- Event team id (robust normalization) ---
+
     if "team_id" in df.columns:
         team_id = df["team_id"].copy()
         # Identify rows where team_id is present but invalid (NaN or 0)
@@ -226,6 +225,11 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df["is_ft"] = fam == "free_throw"
     df["is_ft_make"] = df["is_ft"] & (df["points_made"] > 0)
 
+    if "is_o_rebound" not in df.columns:
+        df["is_o_rebound"] = 0
+    if "is_d_rebound" not in df.columns:
+        df["is_d_rebound"] = 0
+
     # Three-pointers
     if "is_three" in df.columns:
         df["is_three"] = df["is_three"].fillna(0).astype(bool)
@@ -245,10 +249,6 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     if steal_col is None:
         steal_col = pd.Series([0] * len(df), index=df.index)
     is_steal_flag = steal_col.fillna(0).astype(int) == 1
-    is_steal_raw = df.get("is_steal")
-    if is_steal_raw is None:
-        is_steal_raw = pd.Series([0] * len(df), index=df.index)
-    is_steal_flag = is_steal_raw.fillna(0).astype(int) == 1
 
     sub_lower = subfam.astype(str).str.lower()
     # Some feeds may explicitly label "live-ball" in text.
@@ -369,7 +369,14 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
 
         if row.get("family") == "free_throw":
             _increment_count(counts[key], "FTA")
-            if row.get("points_made") > 0:
+
+            # Mirror legacy logic: prefer shot_made when available, otherwise
+            # fall back to points_made > 0.
+            shot_made = row.get("shot_made")
+            if shot_made is not None and not pd.isna(shot_made):
+                if int(shot_made) == 1:
+                    _increment_count(counts[key], "FTM")
+            elif row.get("points_made", 0) > 0:
                 _increment_count(counts[key], "FTM")
 
         if not pd.isna(player_id):
@@ -646,7 +653,7 @@ def build_player_box(
     # Restrict to players with positive Minutes only (debug / optional).
     # By default we keep zero-minute rows if they carry on-court points,
     # to preserve scoring invariants enforced in tests.
-    if restrict_to_pbg:
+    if restrict_to_pbg and zero_minute_with_points.empty:
         merged = merged[merged["Minutes"] > 0]
 
     merged["Team_SingleGame"] = merged["team_id"]
