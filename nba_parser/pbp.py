@@ -852,8 +852,12 @@ class PbP:
             True,
             False,
         )
+        valid_team_rows = self.df[
+            self.df["player1_team_id"].notna() & (self.df["player1_team_id"] != 0)
+        ]
+
         teams_df = (
-            self.df.groupby(["player1_team_id", "game_id"])[
+            valid_team_rows.groupby(["player1_team_id", "game_id"])[
                 [
                     "points_made",
                     "is_three",
