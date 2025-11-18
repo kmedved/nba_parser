@@ -1274,18 +1274,45 @@ class PbP:
         # Combine player and metadata columns for selection
         selected_cols = player_cols + metadata_cols
 
+        # Canonical possession-ending families (after normalization)
+        valid_end_families = {
+            "rebound",
+            "turnover",
+            "shot",
+            "missed_shot",
+            "miss_shot",
+            "free_throw",
+        }
+
         for seg_idx, df in enumerate(poss_list):
             if df.empty:
                 continue
 
-            last_type = df.loc[df.index[-1], "event_type_de"]
-            valid_end_types = ["rebound", "turnover", "shot", "free-throw"]
+            # Normalize event "family" for robust CDN/v2 handling.
+            if "family" in df.columns:
+                fam = df["family"].fillna("").astype(str).str.lower()
+            else:
+                et = df.get("event_type_de")
+                if et is None:
+                    fam = pd.Series([""] * len(df), index=df.index)
+                else:
+                    fam = (
+                        et.fillna("")
+                        .astype(str)
+                        .str.lower()
+                        .str.replace("-", "_", regex=False)
+                    )
 
-            if last_type not in valid_end_types:
-                idx = df[df["event_type_de"].isin(valid_end_types)].index
-                if len(idx) == 0:
+            last_fam = fam.iloc[-1]
+            if last_fam not in valid_end_families:
+                end_idx = fam[fam.isin(valid_end_families)].index
+                if len(end_idx) == 0:
+                    # No obvious possession-ending event in this segment; skip it for
+                    # possession-level RAPM/on‑court scoring while leaving the events
+                    # available for timing-based exposures.
                     continue
-                df = df.loc[: idx[-1]].copy()
+                df = df.loc[: end_idx[-1]].copy()
+                fam = fam.loc[df.index]
 
             # Fail fast with a clear error if the input doesn't have the
             # expected player columns (e.g., incompatible nba_scraper version).
@@ -1346,9 +1373,12 @@ class PbP:
         # Annotate events once for the whole game
         pbp_df = annotate_events(df.copy())
 
+        # Ensure 0..N index so that label-based indexing from poss_index matches positional iloc
+        pbp_df = pbp_df.reset_index(drop=True)
+
         poss_index = pbp_df[(pbp_df.home_possession == 1) | (pbp_df.away_possession == 1)].index
         shift_dfs = []
-        past_index = 0
+        past_index = -1
 
         for i in poss_index:
             # Slice events between possession markers, skipping empty segments
@@ -1357,32 +1387,55 @@ class PbP:
                 shift_dfs.append(seg)
             past_index = i
 
-        # --- NEW: normalize segments so parse_possessions and event_aggs see the same slice ---
-        valid_end_types = {
+        # Capture any remaining events after the last possession marker
+        if past_index < len(pbp_df) - 1:
+            seg = pbp_df.iloc[past_index + 1 :].reset_index(drop=True)
+            if not seg.empty:
+                shift_dfs.append(seg)
+
+        # --- Normalize segments so parse_possessions and event_aggs see the same slice ---
+        # Use the canonical 'family' column from annotate_events so we don't depend
+        # on v2-style event_type_de strings.
+        valid_end_families = {
             "rebound",
             "turnover",
             "shot",
-            "free-throw",
-            "free_throw",
             "missed_shot",
             "miss_shot",
+            "free_throw",
         }
 
         normalized_segments: list[pd.DataFrame] = []
         for seg in shift_dfs:
-            if seg.empty or "event_type_de" not in seg.columns:
+            if seg.empty:
                 normalized_segments.append(seg)
                 continue
 
-            last_type = str(seg["event_type_de"].iloc[-1])
-            if last_type in valid_end_types:
+            # Prefer the canonical family column when available; otherwise fall back
+            # to a normalized event_type_de.
+            if "family" in seg.columns:
+                fam = seg["family"].fillna("").astype(str).str.lower()
+            else:
+                et = seg.get("event_type_de")
+                if et is None:
+                    fam = pd.Series([""] * len(seg), index=seg.index)
+                else:
+                    fam = (
+                        et.fillna("")
+                        .astype(str)
+                        .str.lower()
+                        .str.replace("-", "_", regex=False)
+                    )
+
+            last_fam = fam.iloc[-1]
+            if last_fam in valid_end_families:
                 normalized_segments.append(seg)
                 continue
 
-            mask = seg["event_type_de"].isin(valid_end_types)
+            mask = fam.isin(valid_end_families)
             if not mask.any():
-                # No terminal events in this stretch; treat as empty so
-                # it won't generate a possession row.
+                # No obvious possession-ending event in this stretch:
+                # treat as non-possession for RAPM/on‑court scoring.
                 normalized_segments.append(seg.iloc[0:0])
                 continue
 
