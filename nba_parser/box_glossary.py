@@ -28,14 +28,18 @@ def classify_shot_zone(shot_distance: float | None, area: str | None) -> Optiona
         else:
             return None
 
-    if area:
-        area_lower = area.lower()
-        if "restricted" in area_lower:
-            return "0_3"
-        if "paint" in area_lower:
-            return "4_9"
-        if "mid-range" in area_lower:
-            return None
+    # Some CDN datasets omit the shot area entirely or encode it as NaN/float.
+    if area is None or pd.isna(area):
+        return None
+
+    area_str = area if isinstance(area, str) else str(area)
+    area_lower = area_str.lower()
+    if "restricted" in area_lower:
+        return "0_3"
+    if "paint" in area_lower:
+        return "4_9"
+    if "mid-range" in area_lower:
+        return None
     return None
 
 
