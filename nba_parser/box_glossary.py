@@ -41,6 +41,9 @@ def classify_shot_zone(shot_distance: float | None, area: str | None) -> Optiona
 
 def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
+    # Preserve original upstream family (e.g., "2pt", "3pt") for debugging.
+    if "family" in df.columns and "family_raw" not in df.columns:
+        df["family_raw"] = df["family"]
     # --- Subfamily normalization ---
     if "subfamily_de" in df.columns:
         subfam = df["subfamily_de"].fillna("")
@@ -55,18 +58,25 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     if "event_type_de" in df.columns:
         fam_src = df["event_type_de"]
     else:
-        fam_src = df.get("family", "")
+        raise KeyError("annotate_events expects an 'event_type_de' column")
 
     fam = fam_src.astype(str).str.lower().str.replace("-", "_", regex=False)
     df["family"] = fam
 
     # --- Event team id ---
     if "team_id" not in df.columns:
+        event_team = df.get("event_team")
+        if event_team is None:
+            # Some feeds may expose team code as team_tricode instead.
+            event_team = df.get("team_tricode")
+        if event_team is None:
+            event_team = pd.Series([None] * len(df), index=df.index)
+
         df["team_id"] = np.where(
-            df.get("event_team") == df.get("home_team_abbrev"),
+            event_team == df.get("home_team_abbrev"),
             df.get("home_team_id"),
             np.where(
-                df.get("event_team") == df.get("away_team_abbrev"),
+                event_team == df.get("away_team_abbrev"),
                 df.get("away_team_id"),
                 np.nan,
             ),
@@ -343,15 +353,24 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                     key = (row.get("game_id"), block_team, pid)
                     _increment_count(exposures[key], "TM_BLK_OnCourt")
 
-        if row.get("is_fg_attempt") and row.get("shot_made") == 0:
+        # Treat any missed FG attempt as an OREB/DREB opportunity.
+        if row.get("is_fg_attempt") and not bool(row.get("is_fg_make")):
             shoot_team = row.get("team_id")
             home_on = home_ids
             away_on = away_ids
+
+            # On-court offensive rebound opportunities for the shooting team.
             for pid in (home_on if shoot_team == row.get("home_team_id") else away_on):
                 if pid and pid != 0:
                     key = (row.get("game_id"), shoot_team, pid)
                     _increment_count(exposures[key], "OnCourt_For_OREB_FGA")
-            opp_team = row.get("away_team_id") if shoot_team == row.get("home_team_id") else row.get("home_team_id")
+
+            # On-court defensive rebound opportunities for the defending team.
+            opp_team = (
+                row.get("away_team_id")
+                if shoot_team == row.get("home_team_id")
+                else row.get("home_team_id")
+            )
             for pid in (away_on if shoot_team == row.get("home_team_id") else home_on):
                 if pid and pid != 0:
                     key = (row.get("game_id"), opp_team, pid)
