@@ -739,8 +739,101 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
     return result_df
 
 
+def _build_canonical_team_map(df: pd.DataFrame) -> Dict[int, int]:
+    """
+    Infer a single canonical team_id for each player from the lineup columns.
+
+    Returns a dict: {player_id: team_id} based on home_player_*_id / away_player_*_id.
+
+    If a player somehow appears for multiple teams, the team with the highest
+    appearance count is chosen, and a warning is emitted.
+    """
+
+    home_cols = [f"home_player_{i}_id" for i in range(1, 6)]
+    away_cols = [f"away_player_{i}_id" for i in range(1, 6)]
+
+    frames: list[pd.DataFrame] = []
+
+    if all(col in df.columns for col in home_cols + ["home_team_id"]):
+        home_df = df[["home_team_id"] + home_cols].copy()
+        home_df = home_df.melt(
+            id_vars="home_team_id",
+            value_name="player_id",
+        ).drop(columns="variable")
+        home_df.rename(columns={"home_team_id": "team_id"}, inplace=True)
+        frames.append(home_df)
+
+    if all(col in df.columns for col in away_cols + ["away_team_id"]):
+        away_df = df[["away_team_id"] + away_cols].copy()
+        away_df = away_df.melt(
+            id_vars="away_team_id",
+            value_name="player_id",
+        ).drop(columns="variable")
+        away_df.rename(columns={"away_team_id": "team_id"}, inplace=True)
+        frames.append(away_df)
+
+    if not frames:
+        return {}
+
+    combined = pd.concat(frames, ignore_index=True)
+
+    # Coerce IDs and drop non-players
+    combined["player_id"] = (
+        pd.to_numeric(combined["player_id"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    combined["team_id"] = (
+        pd.to_numeric(combined["team_id"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    combined = combined[combined["player_id"] != 0]
+
+    if combined.empty:
+        return {}
+
+    counts = (
+        combined.groupby(["player_id", "team_id"], as_index=False)
+        .size()
+        .rename(columns={"size": "n_events"})
+    )
+
+    idx = counts.groupby("player_id")["n_events"].idxmax()
+    canonical = counts.loc[idx, ["player_id", "team_id"]]
+
+    multi_team = counts.groupby("player_id")["team_id"].nunique()
+    bad_players = multi_team[multi_team > 1].index.tolist()
+    if bad_players:
+        import warnings
+
+        warnings.warn(
+            f"_build_canonical_team_map: players appear for multiple teams in lineup data: {bad_players}",
+            RuntimeWarning,
+        )
+
+    return dict(zip(canonical["player_id"], canonical["team_id"]))
+
+
 def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
     exposures: Dict[tuple, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+
+    canonical_map = _build_canonical_team_map(df)
+
+    def _get_team_for_player(pid_val: Any, fallback_team_val: Any) -> int:
+        """
+        Resolve the team_id to use for a given player and fallback team label.
+
+        - First prefer the canonical team inferred from lineups.
+        - If the player is missing from the map (should be rare), fall back
+          to the provided team label (home/away/off/def), coerced to int.
+        """
+
+        pid = _coerce_id_scalar(pid_val)
+        team = canonical_map.get(pid)
+        if team is not None:
+            return team
+        return _coerce_id_scalar(fallback_team_val)
 
     for _, row in df.iterrows():
         event_length = row.get("event_length", 0)
@@ -752,7 +845,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
             if _valid_player_id(pid):
                 key = (
                     _coerce_id_scalar(row.get("game_id")),
-                    _coerce_id_scalar(row.get("home_team_id")),
+                    _get_team_for_player(pid, row.get("home_team_id")),
                     _coerce_id_scalar(pid),
                 )
                 _increment_count(exposures[key], "Minutes", event_length / 60.0)
@@ -760,7 +853,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
             if _valid_player_id(pid):
                 key = (
                     _coerce_id_scalar(row.get("game_id")),
-                    _coerce_id_scalar(row.get("away_team_id")),
+                    _get_team_for_player(pid, row.get("away_team_id")),
                     _coerce_id_scalar(pid),
                 )
                 _increment_count(exposures[key], "Minutes", event_length / 60.0)
@@ -778,7 +871,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                 if _valid_player_id(pid):
                     key = (
                         _coerce_id_scalar(row.get("game_id")),
-                        _coerce_id_scalar(block_team),
+                        _get_team_for_player(pid, block_team),
                         _coerce_id_scalar(pid),
                     )
                     _increment_count(exposures[key], "TM_BLK_OnCourt")
@@ -803,7 +896,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                 if _valid_player_id(pid):
                     key = (
                         _coerce_id_scalar(row.get("game_id")),
-                        _coerce_id_scalar(shoot_team),
+                        _get_team_for_player(pid, shoot_team),
                         _coerce_id_scalar(pid),
                     )
                     _increment_count(exposures[key], "OnCourt_For_OREB_Total")
@@ -818,7 +911,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
                 if _valid_player_id(pid):
                     key = (
                         _coerce_id_scalar(row.get("game_id")),
-                        _coerce_id_scalar(opp_team),
+                        _get_team_for_player(pid, opp_team),
                         _coerce_id_scalar(pid),
                     )
                     _increment_count(exposures[key], "OnCourt_For_DREB_Total")
@@ -840,7 +933,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
             if _valid_player_id(pid):
                 key = (
                     _coerce_id_scalar(poss.get("game_id")),
-                    _coerce_id_scalar(off_team),
+                    _get_team_for_player(pid, off_team),
                     _coerce_id_scalar(pid),
                 )
                 _increment_count(exposures[key], "POSS_OFF")
@@ -869,7 +962,7 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
             if _valid_player_id(pid):
                 key = (
                     _coerce_id_scalar(poss.get("game_id")),
-                    _coerce_id_scalar(def_team),
+                    _get_team_for_player(pid, def_team),
                     _coerce_id_scalar(pid),
                 )
                 _increment_count(exposures[key], "POSS_DEF")
@@ -929,6 +1022,14 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
 
     if not exposure_df.empty:
         _validate_id_dtypes(exposure_df, context="compute_on_court_exposures")
+
+        duplicates = exposure_df.groupby(["game_id", "player_id"])["team_id"].nunique()
+        bad = duplicates[duplicates > 1]
+        if not bad.empty:
+            raise AssertionError(
+                "compute_on_court_exposures: player(s) appear for multiple teams in one game: "
+                f"{list(bad.index)}"
+            )
 
     return exposure_df
 
