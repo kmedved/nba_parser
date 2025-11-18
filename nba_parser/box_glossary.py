@@ -56,16 +56,12 @@ ZONE_BINS: List[Tuple[float, float, str]] = [
 def classify_shot_zone(shot_distance: float | None, area: str | None) -> Optional[str]:
     if shot_distance is not None and not pd.isna(shot_distance):
         d = float(shot_distance)
-        if 0.0 <= d <= 3.0:
-            return "0_3"
-        elif 3.0 < d <= 9.0:
-            return "4_9"
-        elif 9.0 < d <= 17.0:
-            return "10_17"
-        elif 17.0 < d <= 23.0:
-            return "18_23"
-        else:
-            return None
+        for lower, upper, label in ZONE_BINS:
+            lower_ok = d >= lower if lower == 0.0 else d > lower
+            upper_ok = d <= upper or np.isclose(d, upper)
+            if lower_ok and upper_ok:
+                return label
+        return None
 
     # Some CDN datasets omit the shot area entirely or encode it as NaN/float.
     if area is None or pd.isna(area):
@@ -189,25 +185,9 @@ def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
     df["is_charge"] = is_foul_family & sub.str.contains("charging")
 
     # --- And-ones via qualifiers ---
-    def _is_and_one_row(row: pd.Series) -> bool:
-        quals = row.get("qualifiers")
-        if not quals:
-            return False
-
-        # If qualifiers come in as a string (e.g., from CSV), do a simple substring search.
-        if isinstance(quals, str):
-            q = quals.lower()
-            return ("andone" in q) or ("and1" in q) or ("and-one" in q)
-
-        # Otherwise assume it's iterable and normalize each entry.
-        try:
-            quals_lower = [str(q).lower() for q in quals]
-        except TypeError:
-            return False
-
-        return any(s in q for q in quals_lower for s in ("andone", "and1", "and-one"))
-
-    df["is_and_one"] = df.apply(_is_and_one_row, axis=1)
+    quals_series = df["qualifiers"] if "qualifiers" in df.columns else pd.Series([None] * len(df), index=df.index)
+    quals_str = quals_series.astype(str).str.lower()
+    df["is_and_one"] = quals_str.str.contains(r"and[ -]?one|and1")
 
     # --- Shot zones ---
     shot_mask = df["is_fg_attempt"]
@@ -530,21 +510,6 @@ def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
         exposure_rows.append({"game_id": game_id, "team_id": team_id, "player_id": player_id, **vals})
 
     exposure_df = pd.DataFrame(exposure_rows)
-    try:
-        toc_df = pbp._toc_calc_player()[["player_id", "team_id", "game_id", "toc"]]
-        toc_df["Minutes_calc"] = toc_df["toc"] / 60.0
-        exposure_df = exposure_df.merge(
-            toc_df[["player_id", "team_id", "game_id", "Minutes_calc"]],
-            on=["player_id", "team_id", "game_id"],
-            how="left",
-        )
-        minutes = exposure_df["Minutes"].astype(float)
-        minutes_calc = exposure_df["Minutes_calc"].astype(float)
-        minutes = np.where(minutes == 0.0, minutes_calc.fillna(0.0), minutes)
-        exposure_df["Minutes"] = minutes
-        exposure_df.drop(columns=["Minutes_calc"], inplace=True)
-    except Exception:
-        pass
 
     # Ensure MPG and MPG_R reflect the final Minutes value
     exposure_df["MPG"] = exposure_df["Minutes"]

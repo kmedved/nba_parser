@@ -1719,6 +1719,7 @@ class PbP:
 
         # Sanity check: on-court points must match team totals.
         self._check_on_court_points_consistency(box_df)
+        self._check_on_court_minutes_consistency(box_df)
 
         return box_df
 
@@ -1756,6 +1757,32 @@ class PbP:
                     f"OnCourt_Opp_Points inconsistency for team {team_id}: "
                     f"actual={actual_against}, expected={expected_against}"
                 )
+
+    def _check_on_court_minutes_consistency(self, box: pd.DataFrame, tol: float = 1e-6) -> None:
+        """
+        Internal helper: verify that summed Minutes per team equal total game
+        duration multiplied by 5.
+
+        Raises AssertionError if an invariant is violated.
+        """
+
+        if "event_length" not in self.df.columns or self.df.empty:
+            return
+
+        durations = self.df.copy()
+        durations["event_length"] = durations["event_length"].fillna(0).astype(float)
+        game_minutes = durations.groupby("game_id")["event_length"].sum() / 60.0
+
+        for game_id, total_minutes in game_minutes.items():
+            expected_minutes = total_minutes * 5.0
+            team_minutes = box.loc[box["game_id"] == game_id].groupby("team_id")["Minutes"].sum()
+
+            for team_id, actual_minutes in team_minutes.items():
+                if abs(actual_minutes - expected_minutes) > tol:
+                    raise AssertionError(
+                        f"OnCourt Minutes inconsistency for team {team_id} in game {game_id}: "
+                        f"actual={actual_minutes}, expected={expected_minutes}"
+                    )
 
     def playerbygamestats(self):
         """
