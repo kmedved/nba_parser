@@ -88,11 +88,21 @@ def _qualifier_to_str(val: Any) -> str:
       - other objects
 
     Rules:
-      - None / NaN (scalar float nan) -> ""
+      - None / NaN / pd.NA -> ""
       - everything else -> str(val).lower()
     """
     if val is None:
         return ""
+
+    # Explicitly treat pandas' scalar NA as empty.
+    try:
+        import pandas as pd  # local import to avoid circulars in some environments
+
+        if val is pd.NA:
+            return ""
+    except Exception:
+        # If pandas isn't available here for some reason, fall through.
+        pass
 
     # Treat scalar NaN (Python or NumPy float) as empty.
     if isinstance(val, (float, np.floating)) and np.isnan(val):
@@ -133,11 +143,14 @@ def _vectorized_shot_zone(df: pd.DataFrame) -> pd.Series:
     """
     Vectorized calculation of shot zones.
     """
-    shot_col = df.get("shot_distance")
-    if shot_col is None:
+    # Handle the case where shot_distance is missing (area-only data).
+    raw_distance = df.get("shot_distance")
+    if raw_distance is None:
+        # No distance information at all: start with an all-NaN Series so
+        # distance-based masks simply don't fire.
         shot_distance = pd.Series(np.nan, index=df.index)
     else:
-        shot_distance = pd.to_numeric(shot_col, errors="coerce")
+        shot_distance = pd.to_numeric(raw_distance, errors="coerce")
 
     area_col = df.get("area")
     if area_col is None:
@@ -160,7 +173,7 @@ def _vectorized_shot_zone(df: pd.DataFrame) -> pd.Series:
     zones[fallback_mask & area.str.contains("restricted")] = "0_3"
     zones[fallback_mask & area.str.contains("paint")] = "4_9"
 
-    return zones
+    return zones.where(~zones.isna(), None)
 
 
 def annotate_events(df: pd.DataFrame) -> pd.DataFrame:
@@ -490,13 +503,20 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
             #   - Prefer explicit assist_id, fallback to player2_id for v2.
             assist_id = None
             if is_make:
-                assist_id = row.get("assist_id")
                 shooter = row.get("player1_id")
-                if not _valid_player_id(assist_id) or assist_id == shooter:
-                    assist_id = None
-                    if "player2_id" in row.index:
-                        p2 = row.get("player2_id")
-                        if _valid_player_id(p2) and p2 != shooter:
+                shooter_team = row.get("player1_team_id")
+
+                # 1) Prefer explicit assist_id (modern CDN / Stats feeds)
+                potential_assist = row.get("assist_id")
+                if _valid_player_id(potential_assist) and potential_assist != shooter:
+                    assist_id = potential_assist
+
+                # 2) Fallback to player2_id (v2) only if same team as shooter
+                if assist_id is None and "player2_id" in row.index:
+                    p2 = row.get("player2_id")
+                    if _valid_player_id(p2) and p2 != shooter:
+                        p2_team = row.get("player2_team_id")
+                        if p2_team == shooter_team:
                             assist_id = p2
 
             assisted = is_make and _valid_player_id(assist_id)
@@ -644,7 +664,11 @@ def accumulate_player_counts(df: pd.DataFrame) -> pd.DataFrame:
         record.update(vals)
         records.append(record)
 
-    return pd.DataFrame(records)
+    result_df = pd.DataFrame(records)
+    if not result_df.empty:
+        num_cols = result_df.select_dtypes(include=["number"]).columns
+        result_df[num_cols] = result_df[num_cols].fillna(0)
+    return result_df
 
 
 def compute_on_court_exposures(pbp: "PbP", df: pd.DataFrame) -> pd.DataFrame:
@@ -835,20 +859,6 @@ def build_player_box(
             RuntimeWarning,
         )
 
-    merged = merged[
-        (merged.get("Minutes", 0) > 0)
-        | (
-            (merged.get("OnCourt_Team_Points", 0) != 0)
-            | (merged.get("OnCourt_Opp_Points", 0) != 0)
-        )
-    ]
-
-    # Restrict to players with positive Minutes only (debug / optional).
-    # By default we keep zero-minute rows if they carry on-court points,
-    # to preserve scoring invariants enforced in tests.
-    if restrict_to_pbg and zero_minute_with_points.empty:
-        merged = merged[merged["Minutes"] > 0]
-
     merged["Team_SingleGame"] = merged["team_id"]
     merged["Game_SingleGame"] = merged["game_id"]
     merged["NbaDotComID"] = merged["player_id"].astype(int)
@@ -882,7 +892,7 @@ def build_player_box(
         merged = merged.merge(
             player_game_meta,
             on=["game_id", "team_id", "player_id"],
-            how="left",
+            how="outer",
         )
 
     # Games played is always computed from Minutes, not taken from metadata.
@@ -897,6 +907,74 @@ def build_player_box(
             merged[col] = default_val
         else:
             merged[col] = merged[col].fillna(default_val)
+
+    # Now that we have DNP/Inactive flags, decide which rows to keep.
+    # - If restrict_to_pbg is True and there are no timing mismatches,
+    #   keep only players with Minutes > 0.
+    # - Otherwise, keep:
+    #     * players with Minutes > 0
+    #     * OR players with non-zero on-court scoring exposure
+    #     * OR players flagged as DNP/Inactive (so they show up on the roster).
+    if restrict_to_pbg and zero_minute_with_points.empty:
+        keep_mask = merged["Minutes"] > 0
+    else:
+        keep_mask = (
+            (merged.get("Minutes", 0) > 0)
+            | (merged.get("OnCourt_Team_Points", 0) != 0)
+            | (merged.get("OnCourt_Opp_Points", 0) != 0)
+            | (merged.get("DNP", 0) != 0)
+            | (merged.get("Inactive", 0) != 0)
+        )
+
+    merged = merged[keep_mask]
+
+    merged["NbaDotComID"] = merged["player_id"].fillna(0).astype(int)
+
+    required_zero_cols = [
+        "ThreePA",
+        "ThreePM",
+        "TOV",
+        "AST",
+        "POSS_OFF",
+        "POSS_DEF",
+        "OnCourt_For_OREB_Total",
+        "OnCourt_For_DREB_Total",
+        "OnCourt_Opp_2p_Att",
+        "OnCourt_Team_FGM",
+        "OnCourt_Team_FGA",
+        "OnCourt_Team_Points",
+        "OnCourt_Opp_Points",
+        "OnCourt_Team_FT_Att",
+        "OnCourt_Team_FT_Made",
+        "OnCourt_Team_3p_Att",
+        "OnCourt_Team_3p_Made",
+        "Minutes",
+        "FTA",
+        "FTM",
+        "FGA",
+        "FGM",
+        "POSS",
+        "OREB",
+        "DREB",
+        "PF",
+        "BLK",
+        "BLK_Team",
+        "BLK_Opp",
+        "STL",
+        "PF_DRAWN",
+        "CHRG",
+        "Goaltends",
+        "AndOnes",
+        "TOV_Live",
+        "TOV_Dead",
+        "FGM_AST",
+        "ThreePM_AST",
+    ]
+    for col in required_zero_cols:
+        if col not in merged.columns:
+            merged[col] = 0
+        else:
+            merged[col] = merged[col].fillna(0)
 
     for col in ["ThreePA_UNAST", "ThreePM_UNAST", "FGA_UNAST", "FGM_UNAST"]:
         if col not in merged.columns:
