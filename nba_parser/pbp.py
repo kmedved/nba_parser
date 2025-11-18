@@ -1064,7 +1064,7 @@ class PbP:
                                 df.loc[
                                     df.index[-1],
                                     [
-                                        "points_made_y",
+                                        "points_made",
                                         "home_team_abbrev",
                                         "event_team",
                                         "away_team_abbrev",
@@ -1126,7 +1126,7 @@ class PbP:
                                 df.loc[
                                     df.index[-1],
                                     [
-                                        "points_made_y",
+                                        "points_made",
                                         "home_team_abbrev",
                                         "event_team",
                                         "away_team_abbrev",
@@ -1189,7 +1189,7 @@ class PbP:
                                 df.loc[
                                     df.index[-1],
                                     [
-                                        "points_made_y",
+                                        "points_made",
                                         "home_team_abbrev",
                                         "event_team",
                                         "away_team_abbrev",
@@ -1252,7 +1252,7 @@ class PbP:
                                 df.loc[
                                     df.index[-1],
                                     [
-                                        "points_made_y",
+                                        "points_made",
                                         "home_team_abbrev",
                                         "event_team",
                                         "away_team_abbrev",
@@ -1316,7 +1316,7 @@ class PbP:
                             df.loc[
                                 df.index[-1],
                                 [
-                                    "points_made_y",
+                                    "points_made",
                                     "home_team_abbrev",
                                     "event_team",
                                     "away_team_abbrev",
@@ -1378,7 +1378,7 @@ class PbP:
                             df.loc[
                                 df.index[-1],
                                 [
-                                    "points_made_y",
+                                    "points_made",
                                     "home_team_abbrev",
                                     "event_team",
                                     "away_team_abbrev",
@@ -1443,25 +1443,22 @@ class PbP:
         """
 
         pbp_df = df.copy()
-        points_by_second = (
-            pbp_df.groupby(["game_id", "seconds_elapsed"])["points_made"]
-            .sum()
-            .reset_index()
-        )
-        pbp_df = pbp_df.merge(points_by_second, on=["game_id", "seconds_elapsed"])
 
         poss_index = pbp_df[(pbp_df.home_possession == 1) | (pbp_df.away_possession == 1)].index
         shift_dfs = []
         past_index = 0
 
         for i in poss_index:
-            shift_dfs.extend([pbp_df.iloc[past_index + 1 : i + 1, :].reset_index()])
+            # Slice events between possession markers, skipping empty segments
+            seg = pbp_df.iloc[past_index + 1 : i + 1, :].reset_index(drop=True)
+            if not seg.empty:
+                shift_dfs.append(seg)
             past_index = i
 
         parsed_possessions = self.parse_possessions(shift_dfs)
 
+        # If no possessions were detected, return an empty DataFrame
         if not parsed_possessions:
-            # No possessions detected; return an empty DataFrame so callers can handle gracefully.
             return pd.DataFrame()
 
         event_aggs = []
